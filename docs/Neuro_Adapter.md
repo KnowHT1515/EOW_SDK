@@ -1,7 +1,7 @@
 # Neuro Adapter
 
-> Neuro-sama <--> Neuro-SDK <--> Neuro Adapter <--> EOW_SDK <--> Game
-> Echoes_of_the_White <--> EOW_SDK <--> Neuro Adapter <--> Neuro-SDK <--> Game
+> Echoes_of_the_White <--> EOW_SDK <--> Neuro Adapter <--> Neuro-SDK <--> Neuro Game Adapter <--> Game
+> Neuro-sama <--> Neuro-SDK <--> Neuro Adapter <--> EOW_SDK <--> EOW Game Adapter <--> Game
 
 ---
 

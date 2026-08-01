@@ -13,7 +13,7 @@
     "envelope_schema": "1.0",
     "envelope_kind": "request" | "response" | "event",
     "source": "eow_sdk",
-    "target": "eow",
+    "target": "eow" | "neuro",
     "event_id": "<12digit_string>",
     "correlation_id": null | "<12digit_string>",
     "ts_utc": "<iso8601_utc>",
@@ -262,7 +262,7 @@
 {
     "envelope_schema": "1.0",
     "envelope_kind": "request" | "response" | "event",
-    "source": "eow",
+    "source": "eow" | "neuro",
     "target": "eow_sdk",
     "event_id": "<12digit_string>",
     "correlation_id": null | "<12digit_string>",
@@ -343,17 +343,31 @@ The `event_id` is a 12-digit **numeric string** with the following structure:
 
 > [1-digit code] + [9-digit timestamp] + [2-digit random number] = 12-digit numeric string
 
+---
+
 #### Code
 
 Fixed as `7`, the personal code assigned to KnowHT, the creator of this project.
+
+---
 
 #### Timestamp
 
 Formatted as `HHMMSSMMM`, representing hours, minutes, seconds, and milliseconds in UTC.
 
+---
+
 #### Random Number
 
 Range: `00`–`99`
+
+---
+
+### correlation_id
+
+When `envelope_kind` is `response`, the value of `correlation_id` must be identical to the `event_id` of the corresponding original request, establishing a one-to-one mapping between the request and response.
+
+When `envelope_kind` is not `response`, the value of `correlation_id` should be `null`. However, a non-null value will not cause any consequences, as `EOW_SDK` does not use the `correlation_id` field when processing non-response envelopes.
 
 ---
 

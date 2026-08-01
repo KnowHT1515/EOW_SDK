@@ -1,4 +1,4 @@
 [
-    {"service": "silvy", "port": "7107"},
-    {"service": "rucia", "port": "7507"}
+    {"instance": "silvy", "port": "7107"},
+    {"instance": "rucia", "port": "7507"}
 ]
