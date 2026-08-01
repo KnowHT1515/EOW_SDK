@@ -12,6 +12,9 @@ dependencies = [
 [[package]]
 name = "fake-eow"
 version = "1.0.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "itoa"
