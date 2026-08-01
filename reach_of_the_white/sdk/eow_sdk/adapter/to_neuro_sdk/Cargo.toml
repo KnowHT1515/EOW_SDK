@@ -1,8 +1,8 @@
 [package]
-name = "eow-sdk-adapter-to-neuro-sdk"
+name = "neuro-adapter-to-neuro-sdk"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "EOW_SDK adapter for Neuro-SDK"
+description = "Neuro Adapter for Neuro-SDK"
 
 [dependencies]
