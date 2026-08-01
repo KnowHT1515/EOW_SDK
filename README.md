@@ -1,21 +1,36 @@
-# EOW_SDK
+# EOW SDK
 
----
+A modular SDK and protocol bridge for connecting games and external applications with Echoes of the White and Neuro-sama.
 
 ## Overview
 
-**EOW_SDK** is a modular SDK and protocol layer for connecting external applications and games with `Echoes of the White` or `Neuro-sama`.
+**EOW SDK** provides the communication foundation between Echoes of the White, Neuro SDK, and compatible games or external applications. The project currently focuses on transport, protocol validation, and adapter interoperability.
 
 ## Status
 
-This project is under active development.
+This project is under active development. Interfaces and protocol details may change as implementation progresses.
 
-## Transmission
+## Architecture
 
-> Echoes_of_the_White <--> EOW_SDK <--> EOW Game Adapter <--> Game
-> Echoes_of_the_White <--> EOW_SDK <--> Neuro Adapter <--> Neuro-SDK <--> Neuro Game Adapter <--> Game
-> Neuro-sama <--> Neuro-SDK <--> Neuro Adapter <--> EOW_SDK <--> EOW Game Adapter <--> Game
+```mermaid
+flowchart LR
+    EOW["Echoes of the White"] <--> SDK["EOW SDK"]
+    Neuro["Neuro-sama"] <--> NeuroSDK["Neuro SDK"]
+
+    SDK <--> EOWAdapter["EOW Game Adapter"]
+    EOWAdapter <--> EOWGame["EOW-compatible Game"]
+
+    SDK <--> NeuroAdapter["Neuro Adapter"]
+    NeuroAdapter <--> NeuroSDK
+    NeuroSDK <--> NeuroGameAdapter["Neuro Game Adapter"]
+    NeuroGameAdapter <--> NeuroGame["Neuro-compatible Game"]
+```
+
+## Documentation
+
+- [Changelog](docs/CHANGELOG.md)
+- [TODO](docs/TODO.md)
 
 ## License
 
-This project is licensed under the Apache License 2.0.
+This project is licensed under the [Apache License 2.0](LICENSE).
