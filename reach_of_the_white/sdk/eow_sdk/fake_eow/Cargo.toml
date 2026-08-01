@@ -1,0 +1,8 @@
+[package]
+name = "fake-eow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Fake Echoes_of_the_White for EOW_SDK testing"
+
+[dependencies]

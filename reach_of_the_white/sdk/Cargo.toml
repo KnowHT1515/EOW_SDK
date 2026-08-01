@@ -3,7 +3,8 @@ resolver = "3"
 members = [
     "eow_sdk/adapter/from_neuro_sdk",
     "eow_sdk/adapter/to_neuro_sdk",
-    "eow_sdk/transport"
+    "eow_sdk/transport",
+    "eow_sdk/fake_eow"
 ]
 
 [workspace.dependencies]
