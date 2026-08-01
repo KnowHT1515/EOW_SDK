@@ -1,0 +1,8 @@
+[package]
+name = "eow-sdk-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Transport hub between EOW_SDK and Echoes_of_the_White"
+
+[dependencies]

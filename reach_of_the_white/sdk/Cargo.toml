@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = [
+    "eow_sdk/adapter/from_neuro_sdk",
+    "eow_sdk/adapter/to_neuro_sdk",
+    "eow_sdk/transport"
+]
+
+[workspace.dependencies]
+
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"

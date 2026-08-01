@@ -1,0 +1,21 @@
+# --- Python ---
+**/.venv/
+**/.eow_venv/
+
+**/__pycache__/
+*.py[cod]
+**/.pytest_cache/
+
+*.egg-info/
+**/dist/
+**/build/
+
+# --- Rust ---
+**/target/
+
+# --- IDE ---
+**/.idea/
+**/.vscode/
+
+# --- Local history ---
+**/.history/

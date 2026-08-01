@@ -1,0 +1,8 @@
+[package]
+name = "eow-sdk-adapter-to-neuro-sdk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "EOW_SDK adapter for Neuro-SDK"
+
+[dependencies]
