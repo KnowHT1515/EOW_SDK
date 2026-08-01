@@ -1,10 +1,12 @@
+//! Fake EOW instance configuration.
+
 use std::collections::HashSet;
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use serde_json::Value;
 
-const BUNDLED_PORT_MAP: &str = include_str!("../port.json");
+const BUNDLED_INSTANCE_REGISTRY: &str = include_str!("../instance.json");
 const TEST_INSTANCE: &str = "knowht";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,8 +16,15 @@ pub struct FakeEowConfig {
 }
 
 impl FakeEowConfig {
+    pub fn new(instance: impl Into<String>, address: SocketAddrV4) -> Self {
+        Self {
+            instance: instance.into(),
+            address,
+        }
+    }
+
     pub fn bundled() -> Result<Self, ConfigError> {
-        Self::from_json(BUNDLED_PORT_MAP)
+        Self::from_json(BUNDLED_INSTANCE_REGISTRY)
     }
 
     pub fn from_json(json: &str) -> Result<Self, ConfigError> {
@@ -33,16 +42,24 @@ impl FakeEowConfig {
                 .and_then(Value::as_str)
                 .filter(|value| !value.is_empty())
                 .ok_or(ConfigError::InvalidEntry { index })?;
-            let port = object
-                .get("port")
-                .and_then(Value::as_u64)
-                .filter(|port| (1..=u16::MAX as u64).contains(port))
-                .ok_or(ConfigError::InvalidPort { index })? as u16;
 
             if !seen.insert(instance.to_owned()) {
                 return Err(ConfigError::DuplicateInstance(instance.to_owned()));
             }
+
+            let port = match object.get("port") {
+                None => None,
+                Some(Value::String(port)) => Some(
+                    port.parse::<u16>()
+                        .ok()
+                        .filter(|port| *port != 0)
+                        .ok_or(ConfigError::InvalidPort { index })?,
+                ),
+                Some(_) => return Err(ConfigError::InvalidPort { index }),
+            };
+
             if instance == TEST_INSTANCE {
+                let port = port.ok_or(ConfigError::MissingPort { index })?;
                 selected = Some(Self {
                     instance: instance.to_owned(),
                     address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
@@ -60,6 +77,7 @@ pub enum ConfigError {
     InvalidRoot,
     InvalidEntry { index: usize },
     InvalidPort { index: usize },
+    MissingPort { index: usize },
     DuplicateInstance(String),
     MissingTestInstance(String),
 }
@@ -67,21 +85,27 @@ pub enum ConfigError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Json(error) => write!(formatter, "invalid port.json: {error}"),
-            Self::InvalidRoot => formatter.write_str("port.json root must be an array"),
+            Self::Json(error) => write!(formatter, "invalid instance.json: {error}"),
+            Self::InvalidRoot => formatter.write_str("instance.json root must be an array"),
             Self::InvalidEntry { index } => {
-                write!(formatter, "invalid port.json entry at index {index}")
+                write!(formatter, "invalid instance.json entry at index {index}")
             }
             Self::InvalidPort { index } => {
-                write!(formatter, "invalid numeric port at index {index}")
+                write!(formatter, "invalid string port at index {index}")
+            }
+            Self::MissingPort { index } => {
+                write!(formatter, "test instance has no port at index {index}")
             }
             Self::DuplicateInstance(instance) => {
-                write!(formatter, "duplicate instance in port.json: {instance:?}")
+                write!(
+                    formatter,
+                    "duplicate instance in instance.json: {instance:?}"
+                )
             }
             Self::MissingTestInstance(instance) => {
                 write!(
                     formatter,
-                    "missing test instance in port.json: {instance:?}"
+                    "missing test instance in instance.json: {instance:?}"
                 )
             }
         }
@@ -115,18 +139,18 @@ mod tests {
     }
 
     #[test]
-    fn config_requires_numeric_nonzero_port_and_known_instance() {
+    fn config_requires_a_string_nonzero_port_for_the_test_instance() {
         assert!(matches!(
-            FakeEowConfig::from_json(r#"[{"instance":"knowht","port":"7707"}]"#),
+            FakeEowConfig::from_json(r#"[{"instance":"knowht","port":7707}]"#),
             Err(ConfigError::InvalidPort { .. })
         ));
         assert!(matches!(
-            FakeEowConfig::from_json(r#"[{"instance":"knowht","port":0}]"#),
+            FakeEowConfig::from_json(r#"[{"instance":"knowht","port":"0"}]"#),
             Err(ConfigError::InvalidPort { .. })
         ));
         assert!(matches!(
-            FakeEowConfig::from_json(r#"[{"instance":"other","port":7707}]"#),
-            Err(ConfigError::MissingTestInstance(_))
+            FakeEowConfig::from_json(r#"[{"instance":"knowht"}]"#),
+            Err(ConfigError::MissingPort { .. })
         ));
     }
 
@@ -135,8 +159,8 @@ mod tests {
         assert!(matches!(
             FakeEowConfig::from_json(
                 r#"[
-                    {"instance":"knowht","port":7707},
-                    {"instance":"knowht","port":7708}
+                    {"instance":"knowht","port":"7707"},
+                    {"instance":"knowht","port":"7708"}
                 ]"#
             ),
             Err(ConfigError::DuplicateInstance(instance)) if instance == "knowht"

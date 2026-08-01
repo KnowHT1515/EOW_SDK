@@ -18,8 +18,8 @@ The format is as follows:
 {
     "envelope_schema": "1.0",
     "envelope_kind": "request" | "response" | "event",
-    "source": "eow_sdk" | "eow",
-    "target": "eow" | "eow_sdk",
+    "source": "eow_sdk" | "<instance>",
+    "target": "<instance>" | "eow_sdk",
     "event_id": "<12digit_string>",
     "correlation_id": null | "<12digit_string>",
     "ts_utc": "<iso8601_utc>",
@@ -44,13 +44,13 @@ In this case, the communication format is:
 }
 ```
 
-The values of `target` and `source` determine whether `EOW_SDK` applies `Neuro-SDK compatible` conversion to the envelope.
+Every endpoint other than the reserved `eow_sdk` value must be registered in `transport/instance.json`. The values of `target` and `source` determine which instance or adapter handles the Envelope.
 
 `Transport` strictly validates the following:
 
 - Whether the value of `envelope_schema` is within the currently supported range
 - Whether the value of `envelope_kind` is a valid enumeration value
-- Whether both `source` and `target` are present and have different values
+- Whether both `source` and `target` are present, have different values, and are either `eow_sdk` or an instance registered in `instance.json`
 - Whether `event_id` is a `12-digit numeric string`
 - Whether `correlation_id` is either `null` or a `12-digit numeric string`
 - Whether `payload` is present and is a non-empty object
@@ -59,15 +59,88 @@ If any validation fails, the `SDK_Envelope` must not be created.
 
 Additionally, the size of a single serialized `SDK_Envelope`, measured in `UTF-8` bytes, must not exceed `15 * 1024 * 1024 bytes`. Any `SDK_Envelope` exceeding this limit is considered invalid and will be rejected by `Transport`.
 
+---
+
+### SDK_Envelope Assembly
+
+`Transport` explicitly provides assembly entry points for each type of `SDK_Envelope`. `Assembly` references the process-wide immutable `sdk_id`, accepts `target` on every assembly call, populates the remaining required fields, and returns a specification-compliant `SDK_Envelope`.
+
+`Assembly` uses the SDK-wide `ts_utc` and `event_id` generators so all target instances share one event identity source.
+
+Using `Rust` as an example, the following section shows all `SDK_Envelope` assembly methods provided by `Assembly`.
+
+```rust
+fn startup(
+    &self,
+    target: &str,
+) -> AssemblyResult
+
+fn shutdown(
+    &self,
+    target: &str,
+) -> AssemblyResult
+
+fn context(
+    &self,
+    target: &str,
+    content: &str,
+    silent: bool,
+) -> AssemblyResult
+
+fn action_register(
+    &self,
+    target: &str,
+    actions: Vec<SdkAction>,
+) -> AssemblyResult
+
+fn action_unregister(
+    &self,
+    target: &str,
+    action_ids: Vec<String>,
+) -> AssemblyResult
+
+fn action_update(
+    &self,
+    target: &str,
+    actions: Vec<SdkAction>,
+) -> AssemblyResult
+
+fn action_clear(
+    &self,
+    target: &str,
+) -> AssemblyResult
+
+fn action_demand(
+    &self,
+    target: &str,
+    demand: ActionDemand,
+) -> AssemblyResult
+
+fn action_result(
+    &self,
+    target: &str,
+    correlation_id: EventId,
+    result: ActionResult
+) -> AssemblyResult
+
+type AssemblyResult = Result<String, AssemblyError>;
+```
+
+---
+
 ## TCP Transmission
 
 `EOW_SDK` communicates with the main `Echoes_of_the_White` repository through a `full-duplex TCP channel`.
+
+---
 
 ### TCP Framing
 
 TCP byte-stream framing within the project follows the specification below:
 
 > [ `length_prefix` : 4 bytes ] [ `body` : `length_prefix` bytes ] [ `sentinel` : 5 bytes ]
+
+---
 
 #### length_prefix
 
@@ -81,11 +154,15 @@ The value of `length_prefix` must not exceed `20 * 1024 * 1024 bytes`. Otherwise
 
 The value of `length_prefix` must not be `0`. Otherwise, the entire `TCP` connection must be aborted.
 
+---
+
 #### body
 
 The message body has the byte length specified by `length_prefix` and contains the `UTF-8` byte sequence of one complete serialized message.
 
 The framing layer treats the `body` segment as opaque. It only extracts the specified number of bytes according to `length_prefix` and does not parse the contents. Once extracted, the segment is passed to the upper layer for parsing.
+
+---
 
 #### sentinel
 
@@ -98,6 +175,8 @@ The `sentinel` is used only to verify frame integrity. After reading the number 
 - If validation succeeds, the frame is considered complete and the stream is considered correctly aligned. The message is accepted, and the receiver continues reading the `length_prefix` of the next message.
 - If validation fails, the byte stream is considered misaligned and no longer trustworthy. Because the location of subsequent `length_prefix` fields can no longer be trusted and no reliable resynchronization anchor exists, the receiver must abort the entire `TCP` connection. It must not attempt to skip the frame or search the stream for the next `sentinel` to resynchronize.
 
+---
+
 ### TCP Connection
 
 `Echoes_of_the_White` acts as the server and listens on a designated port. `EOW_SDK` then acts as the client and connects to the server.
@@ -108,11 +187,15 @@ The connection between the main repository and the SDK repository is considered 
 
 By default, the project uses `127.0.0.1` over IPv4 as the connection address.
 
+---
+
 #### Ports
 
 An `EOW_SDK` instance connects to a specified `EOW` instance using either externally supplied parameters or internally predefined settings.
 
-The mapping between `EOW` instances and ports is stored in the local `transport/port.json` file.
+Registered instances and their optional ports are stored in `transport/instance.json`. A `port` is a string representation of an integer in `1..=65535`. An instance without a `port` is a legal Envelope endpoint but cannot be connected through TCP.
+
+---
 
 #### Handshake
 
@@ -157,3 +240,60 @@ The connection is then closed.
 Finally, when `result` is `accept`, `EOW_SDK` verifies whether the returned `<instance>` value matches the expected `<instance>` value.
 
 If the value is valid, the connection is considered fully established. Otherwise, `EOW_SDK` closes the connection.
+
+## Recv Bucket
+
+Since inbound `SDK_Envelope`s are generally low-frequency, EOW_SDK owns one unbounded Recv Bucket and gives Transport its producer. Every connected instance writes validated Envelopes into that bucket. FIFO is guaranteed within each TCP connection; across instances, processing order is the actual order in which Envelopes enter the bucket. Transport does not expose a user-facing `recv` API.
+
+---
+
+## SDK_Transport_API
+
+`Transport` exposes the following public API. EOW_SDK initializes the process-wide immutable `sdk_id` and Recv Bucket producer once before using these calls. One SDK runtime may maintain one active connection per registered instance; automatic reconnection is not performed.
+
+---
+
+### connect
+
+Connects the process-wide SDK identity to one registered EOW instance. TCP connection, handshake acceptance, schema validation, and returned-instance validation must all succeed before the connection becomes active.
+
+```rust
+fn connect(instance: &str) -> Result<(), ConnectError>;
+```
+
+An instance without a registered port cannot be connected. Connecting an already-active instance is rejected. Other instance connections are unaffected.
+
+---
+
+### disconnect
+
+Closes one instance connection without sending a business-level shutdown Envelope. Already accepted outbound frames are drained in FIFO order before the socket and workers are closed.
+
+```rust
+fn disconnect(instance: &str) -> Result<(), DisconnectError>;
+```
+
+After disconnect completes, the caller may manually connect the same instance again. No automatic reconnect is attempted.
+
+`shutdown(target)` remains the normal business lifecycle request. EOW_SDK waits for its correlated acknowledgement and then releases that target connection; `disconnect` is the fallback when shutdown cannot complete. `action.clear` never closes TCP.
+
+---
+
+### send
+
+Submits a serialized `SDK_Envelope` to a running `EOW` instance.
+
+```rust
+fn send(sdk_envelope_json: String) -> SendResult;
+
+struct SendResult {
+    ok: bool,
+    violation: Vec<String>,
+}
+```
+
+`sdk_envelope_json` is a `UTF-8`-encoded `JSON` string that must conform to the `SDK_Envelope` specification. Its validity will be checked by `Transport` before it is actually sent.
+
+`send` validates the Envelope, reads its `target`, and synchronously enqueues it on that instance connection. It returns an acceptance result as `SendResult`.
+
+The semantics of `SendResult.ok` are **accepted**, not **delivered**. `SendResult.ok == true` only indicates that the `SDK_Envelope` has entered the target connection writer queue and does **not guarantee** that the `target` has received it. Delivery-level failures are not represented by `SendResult`.

@@ -2,7 +2,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use eow_sdk_transport::{
     ConfigError, EventId, EventIdClock, EventIdGenerator, HandshakeError, HandshakeRequest,
-    HandshakeResponse, PortMap, RandomNumber, RandomNumberOutOfRange, UtcTime,
+    HandshakeResponse, InstanceRegistry, RandomNumber, RandomNumberOutOfRange, UtcTime,
 };
 
 #[test]
@@ -39,7 +39,7 @@ fn event_id_generator_uses_documented_layout_and_injected_sources() {
 
 #[test]
 fn handshake_request_and_responses_round_trip() {
-    let request = HandshakeRequest::new("game-sdk");
+    let request = HandshakeRequest::new("Cyberpunk");
     assert_eq!(
         HandshakeRequest::parse(&request.to_body()).unwrap(),
         request
@@ -73,34 +73,44 @@ fn accepted_handshake_requires_instance_but_deny_does_not() {
 }
 
 #[test]
-fn bundled_port_map_resolves_documented_adapter_ports() {
-    let ports = PortMap::bundled().unwrap();
-    assert_eq!(ports.len(), 2);
+fn bundled_registry_resolves_string_ports_and_keeps_no_port_instances() {
+    let registry = InstanceRegistry::bundled().unwrap();
+    assert_eq!(registry.len(), 3);
     assert_eq!(
-        ports.resolve("silvy").unwrap().address,
+        registry.resolve("silvy").unwrap().address,
         SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7107)
     );
     assert_eq!(
-        ports.resolve("rucia").unwrap().address,
+        registry.resolve("rucia").unwrap().address,
         SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7507)
     );
-}
-
-#[test]
-fn explicit_endpoint_overrides_port_map() {
-    let ports = PortMap::bundled().unwrap();
-    let explicit = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 1), 9000);
-    let resolved = ports
-        .resolve_with_override("not-in-map", Some(explicit))
-        .unwrap();
-    assert_eq!(resolved.instance, "not-in-map");
-    assert_eq!(resolved.address, explicit);
-}
-
-#[test]
-fn port_map_rejects_duplicates_invalid_ports_and_unknown_instances() {
+    assert!(registry.contains("neuro"));
+    assert!(registry.contains("eow_sdk"));
     assert!(matches!(
-        PortMap::from_json(
+        registry.resolve("neuro"),
+        Err(ConfigError::MissingPort(instance)) if instance == "neuro"
+    ));
+}
+
+#[test]
+fn explicit_endpoint_requires_a_registered_instance() {
+    let registry = InstanceRegistry::bundled().unwrap();
+    let explicit = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 1), 9000);
+    let resolved = registry
+        .resolve_with_override("neuro", Some(explicit))
+        .unwrap();
+    assert_eq!(resolved.instance, "neuro");
+    assert_eq!(resolved.address, explicit);
+    assert!(matches!(
+        registry.resolve_with_override("not-registered", Some(explicit)),
+        Err(ConfigError::UnknownInstance(_))
+    ));
+}
+
+#[test]
+fn registry_rejects_invalid_entries_and_non_string_ports() {
+    assert!(matches!(
+        InstanceRegistry::from_json(
             r#"[
                 {"instance":"silvy","port":"7107"},
                 {"instance":"silvy","port":"7108"}
@@ -108,12 +118,18 @@ fn port_map_rejects_duplicates_invalid_ports_and_unknown_instances() {
         ),
         Err(ConfigError::DuplicateInstance(instance)) if instance == "silvy"
     ));
+    for json in [
+        r#"[{"instance":"silvy","port":"0"}]"#,
+        r#"[{"instance":"silvy","port":"65536"}]"#,
+        r#"[{"instance":"silvy","port":7107}]"#,
+    ] {
+        assert!(matches!(
+            InstanceRegistry::from_json(json),
+            Err(ConfigError::InvalidPort { .. })
+        ));
+    }
     assert!(matches!(
-        PortMap::from_json(r#"[{"instance":"silvy","port":"0"}]"#),
-        Err(ConfigError::InvalidPort { .. })
-    ));
-    assert!(matches!(
-        PortMap::bundled().unwrap().resolve("unknown"),
-        Err(ConfigError::UnknownInstance(instance)) if instance == "unknown"
+        InstanceRegistry::from_json(r#"[{"instance":"eow_sdk"}]"#),
+        Err(ConfigError::ReservedInstance(_))
     ));
 }

@@ -1,4 +1,4 @@
-//! EOW instance-to-endpoint configuration.
+//! Registered SDK Envelope endpoints and optional TCP connection ports.
 
 use std::collections::HashMap;
 use std::fs;
@@ -10,7 +10,8 @@ use serde_json::Value;
 use crate::error::ConfigError;
 use crate::limits::DEFAULT_ADDRESS;
 
-const BUNDLED_PORT_MAP: &str = include_str!("../port.json");
+const BUNDLED_INSTANCE_REGISTRY: &str = include_str!("../instance.json");
+const RESERVED_SDK_ENDPOINT: &str = "eow_sdk";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EndpointConfig {
@@ -19,13 +20,13 @@ pub struct EndpointConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PortMap {
-    ports: HashMap<String, u16>,
+pub struct InstanceRegistry {
+    instances: HashMap<String, Option<u16>>,
 }
 
-impl PortMap {
+impl InstanceRegistry {
     pub fn bundled() -> Result<Self, ConfigError> {
-        Self::from_json(BUNDLED_PORT_MAP)
+        Self::from_json(BUNDLED_INSTANCE_REGISTRY)
     }
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
@@ -35,7 +36,7 @@ impl PortMap {
     pub fn from_json(json: &str) -> Result<Self, ConfigError> {
         let value: Value = serde_json::from_str(json)?;
         let entries = value.as_array().ok_or(ConfigError::InvalidRoot)?;
-        let mut ports = HashMap::with_capacity(entries.len());
+        let mut instances = HashMap::with_capacity(entries.len());
 
         for (index, entry) in entries.iter().enumerate() {
             let object = entry
@@ -48,33 +49,46 @@ impl PortMap {
             if instance.is_empty() {
                 return Err(ConfigError::EmptyInstance { index });
             }
+            if instance == RESERVED_SDK_ENDPOINT {
+                return Err(ConfigError::ReservedInstance(instance.to_owned()));
+            }
 
-            let port_text = object
-                .get("port")
-                .and_then(Value::as_str)
-                .ok_or(ConfigError::InvalidEntry { index })?;
-            let port = port_text
-                .parse::<u16>()
-                .map_err(|_| ConfigError::InvalidPort {
-                    instance: instance.to_owned(),
-                    port: port_text.to_owned(),
-                })?;
-            if port == 0 {
+            let port =
+                match object.get("port") {
+                    None => None,
+                    Some(Value::String(port_text)) => Some(port_text.parse::<u16>().map_err(
+                        |_| ConfigError::InvalidPort {
+                            instance: instance.to_owned(),
+                            port: port_text.to_owned(),
+                        },
+                    )?),
+                    Some(other) => {
+                        return Err(ConfigError::InvalidPort {
+                            instance: instance.to_owned(),
+                            port: other.to_string(),
+                        });
+                    }
+                };
+            if port == Some(0) {
                 return Err(ConfigError::InvalidPort {
                     instance: instance.to_owned(),
-                    port: port_text.to_owned(),
+                    port: "0".to_owned(),
                 });
             }
-            if ports.insert(instance.to_owned(), port).is_some() {
+            if instances.insert(instance.to_owned(), port).is_some() {
                 return Err(ConfigError::DuplicateInstance(instance.to_owned()));
             }
         }
 
-        Ok(Self { ports })
+        Ok(Self { instances })
+    }
+
+    pub fn contains(&self, instance: &str) -> bool {
+        instance == RESERVED_SDK_ENDPOINT || self.instances.contains_key(instance)
     }
 
     pub fn port(&self, instance: &str) -> Option<u16> {
-        self.ports.get(instance).copied()
+        self.instances.get(instance).copied().flatten()
     }
 
     pub fn resolve(&self, instance: &str) -> Result<EndpointConfig, ConfigError> {
@@ -87,34 +101,38 @@ impl PortMap {
         address: Ipv4Addr,
     ) -> Result<EndpointConfig, ConfigError> {
         let port = self
-            .port(instance)
-            .ok_or_else(|| ConfigError::UnknownInstance(instance.to_owned()))?;
+            .instances
+            .get(instance)
+            .ok_or_else(|| ConfigError::UnknownInstance(instance.to_owned()))?
+            .ok_or_else(|| ConfigError::MissingPort(instance.to_owned()))?;
         Ok(EndpointConfig {
             instance: instance.to_owned(),
             address: SocketAddrV4::new(address, port),
         })
     }
 
-    /// An explicit socket endpoint takes precedence over the bundled instance map.
+    /// An explicit socket endpoint takes precedence over the registered port, but
+    /// the instance itself must still be registered.
     pub fn resolve_with_override(
         &self,
         instance: &str,
         explicit: Option<SocketAddrV4>,
     ) -> Result<EndpointConfig, ConfigError> {
         match explicit {
-            Some(address) => Ok(EndpointConfig {
+            Some(address) if self.instances.contains_key(instance) => Ok(EndpointConfig {
                 instance: instance.to_owned(),
                 address,
             }),
+            Some(_) => Err(ConfigError::UnknownInstance(instance.to_owned())),
             None => self.resolve(instance),
         }
     }
 
     pub fn len(&self) -> usize {
-        self.ports.len()
+        self.instances.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.ports.is_empty()
+        self.instances.is_empty()
     }
 }

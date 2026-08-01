@@ -3,7 +3,10 @@ name = "eow-sdk-transport"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Transport hub between EOW_SDK and Echoes_of_the_White"
+description = "Multi-instance client transport between EOW_SDK and Echoes_of_the_White"
 
 [dependencies]
 serde_json = "1.0"
+
+[dev-dependencies]
+fake-eow = { path = "../fake_eow" }

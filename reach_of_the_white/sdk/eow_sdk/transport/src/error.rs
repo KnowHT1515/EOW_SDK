@@ -1,17 +1,18 @@
-//! Error types shared by the protocol foundations.
+//! Error types shared by the protocol foundations and runtime.
 
 use std::fmt;
 use std::io;
 
 use crate::envelope::EnvelopeViolation;
+use crate::event_id::RandomNumberOutOfRange;
 use crate::frame::FrameAbort;
 
-/// Failure to parse or validate an SDK Envelope.
 #[derive(Debug)]
 pub enum EnvelopeError {
     Json(serde_json::Error),
     Oversize { actual: usize, maximum: usize },
     Invalid(Vec<EnvelopeViolation>),
+    Config(ConfigError),
 }
 
 impl fmt::Display for EnvelopeError {
@@ -24,6 +25,7 @@ impl fmt::Display for EnvelopeError {
             Self::Invalid(violations) => {
                 write!(f, "SDK Envelope failed static validation: {violations:?}")
             }
+            Self::Config(error) => write!(f, "could not load instance registry: {error}"),
         }
     }
 }
@@ -32,6 +34,7 @@ impl std::error::Error for EnvelopeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Json(error) => Some(error),
+            Self::Config(error) => Some(error),
             Self::Oversize { .. } | Self::Invalid(_) => None,
         }
     }
@@ -43,7 +46,12 @@ impl From<serde_json::Error> for EnvelopeError {
     }
 }
 
-/// Failure to encode or parse a handshake control body.
+impl From<ConfigError> for EnvelopeError {
+    fn from(error: ConfigError) -> Self {
+        Self::Config(error)
+    }
+}
+
 #[derive(Debug)]
 pub enum HandshakeError {
     Json(serde_json::Error),
@@ -74,7 +82,6 @@ impl From<serde_json::Error> for HandshakeError {
     }
 }
 
-/// Failure to load or resolve an instance endpoint.
 #[derive(Debug)]
 pub enum ConfigError {
     Json(serde_json::Error),
@@ -84,26 +91,39 @@ pub enum ConfigError {
     EmptyInstance { index: usize },
     InvalidPort { instance: String, port: String },
     DuplicateInstance(String),
+    ReservedInstance(String),
     UnknownInstance(String),
+    MissingPort(String),
 }
 
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Json(error) => write!(f, "invalid port map JSON: {error}"),
-            Self::Io(error) => write!(f, "could not read port map: {error}"),
-            Self::InvalidRoot => write!(f, "port map must be a JSON array"),
-            Self::InvalidEntry { index } => write!(f, "invalid port map entry at index {index}"),
+            Self::Json(error) => write!(f, "invalid instance registry JSON: {error}"),
+            Self::Io(error) => write!(f, "could not read instance registry: {error}"),
+            Self::InvalidRoot => write!(f, "instance registry must be a JSON array"),
+            Self::InvalidEntry { index } => {
+                write!(f, "invalid instance registry entry at index {index}")
+            }
             Self::EmptyInstance { index } => {
-                write!(f, "empty instance in port map entry at index {index}")
+                write!(f, "empty instance in registry entry at index {index}")
             }
             Self::InvalidPort { instance, port } => {
                 write!(f, "invalid port {port:?} for instance {instance:?}")
             }
             Self::DuplicateInstance(instance) => {
-                write!(f, "duplicate instance in port map: {instance:?}")
+                write!(f, "duplicate instance in registry: {instance:?}")
+            }
+            Self::ReservedInstance(instance) => {
+                write!(
+                    f,
+                    "reserved SDK endpoint cannot be registered: {instance:?}"
+                )
             }
             Self::UnknownInstance(instance) => write!(f, "unknown EOW instance: {instance:?}"),
+            Self::MissingPort(instance) => {
+                write!(f, "EOW instance has no TCP port: {instance:?}")
+            }
         }
     }
 }
@@ -130,7 +150,6 @@ impl From<io::Error> for ConfigError {
     }
 }
 
-/// Failure while reading or writing framed bytes.
 #[derive(Debug)]
 pub enum FramedIoError {
     Io(io::Error),
@@ -166,5 +185,174 @@ impl std::error::Error for FramedIoError {
 impl From<io::Error> for FramedIoError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
+    }
+}
+
+#[derive(Debug)]
+pub enum InitError {
+    EmptySdkId,
+    AlreadyInitialized,
+    Config(ConfigError),
+}
+
+impl fmt::Display for InitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptySdkId => f.write_str("sdk_id must not be empty"),
+            Self::AlreadyInitialized => f.write_str("EOW SDK transport is already initialized"),
+            Self::Config(error) => write!(f, "could not initialize instance registry: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for InitError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Config(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<ConfigError> for InitError {
+    fn from(error: ConfigError) -> Self {
+        Self::Config(error)
+    }
+}
+
+#[derive(Debug)]
+pub enum ConnectError {
+    NotInitialized,
+    Config(ConfigError),
+    AlreadyConnected(String),
+    Io(io::Error),
+    Framed(FramedIoError),
+    Handshake(HandshakeError),
+    HandshakeClosed,
+    HandshakeDenied,
+    UnsupportedSchema(String),
+    InstanceMismatch { expected: String, actual: String },
+    Spawn(io::Error),
+}
+
+impl fmt::Display for ConnectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotInitialized => f.write_str("EOW SDK transport is not initialized"),
+            Self::Config(error) => write!(f, "could not resolve EOW instance: {error}"),
+            Self::AlreadyConnected(instance) => {
+                write!(f, "EOW instance is already connected: {instance:?}")
+            }
+            Self::Io(error) => write!(f, "TCP connection setup failed: {error}"),
+            Self::Framed(error) => write!(f, "handshake frame I/O failed: {error}"),
+            Self::Handshake(error) => write!(f, "handshake response failed: {error}"),
+            Self::HandshakeClosed => f.write_str("EOW closed before replying to the handshake"),
+            Self::HandshakeDenied => f.write_str("EOW denied the SDK handshake"),
+            Self::UnsupportedSchema(schema) => {
+                write!(f, "unsupported handshake schema: {schema:?}")
+            }
+            Self::InstanceMismatch { expected, actual } => write!(
+                f,
+                "handshake instance mismatch: expected {expected:?}, got {actual:?}"
+            ),
+            Self::Spawn(error) => write!(f, "could not spawn connection worker: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ConnectError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Io(error) | Self::Spawn(error) => Some(error),
+            Self::Framed(error) => Some(error),
+            Self::Handshake(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<ConfigError> for ConnectError {
+    fn from(error: ConfigError) -> Self {
+        Self::Config(error)
+    }
+}
+
+impl From<FramedIoError> for ConnectError {
+    fn from(error: FramedIoError) -> Self {
+        Self::Framed(error)
+    }
+}
+
+impl From<HandshakeError> for ConnectError {
+    fn from(error: HandshakeError) -> Self {
+        Self::Handshake(error)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DisconnectError {
+    NotInitialized,
+    NotConnected(String),
+    WorkerPanicked(String),
+}
+
+impl fmt::Display for DisconnectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotInitialized => f.write_str("EOW SDK transport is not initialized"),
+            Self::NotConnected(instance) => {
+                write!(f, "EOW instance is not connected: {instance:?}")
+            }
+            Self::WorkerPanicked(instance) => {
+                write!(f, "connection worker panicked for instance {instance:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DisconnectError {}
+
+#[derive(Debug)]
+pub enum AssemblyError {
+    NotInitialized,
+    InvalidTarget(String),
+    EventId(RandomNumberOutOfRange),
+    Envelope(EnvelopeError),
+}
+
+impl fmt::Display for AssemblyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotInitialized => f.write_str("EOW SDK transport is not initialized"),
+            Self::InvalidTarget(target) => {
+                write!(
+                    f,
+                    "Assembly target is not a registered instance: {target:?}"
+                )
+            }
+            Self::EventId(error) => write!(f, "could not generate event_id: {error}"),
+            Self::Envelope(error) => write!(f, "could not assemble SDK Envelope: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for AssemblyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::EventId(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<RandomNumberOutOfRange> for AssemblyError {
+    fn from(error: RandomNumberOutOfRange) -> Self {
+        Self::EventId(error)
+    }
+}
+impl From<EnvelopeError> for AssemblyError {
+    fn from(error: EnvelopeError) -> Self {
+        Self::Envelope(error)
     }
 }

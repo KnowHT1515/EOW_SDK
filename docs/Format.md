@@ -13,7 +13,7 @@
     "envelope_schema": "1.0",
     "envelope_kind": "request" | "response" | "event",
     "source": "eow_sdk",
-    "target": "eow" | "neuro",
+    "target": "<instance>",
     "event_id": "<12digit_string>",
     "correlation_id": null | "<12digit_string>",
     "ts_utc": "<iso8601_utc>",
@@ -24,6 +24,8 @@
     }
 }
 ```
+
+`<instance>` must be present in `transport/instance.json`.
 
 `<type>` includes `[startup, shutdown, context, action]`
 
@@ -262,7 +264,7 @@
 {
     "envelope_schema": "1.0",
     "envelope_kind": "request" | "response" | "event",
-    "source": "eow" | "neuro",
+    "source": "<instance>",
     "target": "eow_sdk",
     "event_id": "<12digit_string>",
     "correlation_id": null | "<12digit_string>",

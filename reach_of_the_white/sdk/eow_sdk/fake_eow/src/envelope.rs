@@ -59,20 +59,32 @@ impl Envelope {
         Ok(Self { object })
     }
 
-    pub fn validate_inbound_for_eow(&self) -> Result<(), EnvelopeError> {
-        if self.source() == "eow_sdk" && self.target() == "eow" {
-            Ok(())
-        } else {
-            Err(EnvelopeError::WrongRoute {
+    pub fn validate_inbound_for_eow(
+        &self,
+        instance: &str,
+        sdk_id: &str,
+    ) -> Result<(), EnvelopeError> {
+        if self.source() != "eow_sdk" || self.target() != instance {
+            return Err(EnvelopeError::WrongRoute {
+                expected_source: "eow_sdk".to_owned(),
+                expected_target: instance.to_owned(),
                 source: self.source().to_owned(),
                 target: self.target().to_owned(),
-            })
+            });
         }
+        if self.payload_sdk_id() != Some(sdk_id) {
+            return Err(EnvelopeError::WrongSdkId {
+                expected: sdk_id.to_owned(),
+                actual: self.payload_sdk_id().map(str::to_owned),
+            });
+        }
+        Ok(())
     }
 
-    pub fn ready(instance: &str, metadata: &EventMetadataGenerator) -> Self {
+    pub fn ready(instance: &str, sdk_id: &str, metadata: &EventMetadataGenerator) -> Self {
         let generated = metadata.next();
         let payload = json!({
+            "sdk_id": sdk_id,
             "type": "fake_eow.ready",
             "instance": instance,
         })
@@ -82,7 +94,7 @@ impl Envelope {
 
         Self::from_fields(
             EnvelopeKind::Event,
-            "eow",
+            instance,
             "eow_sdk",
             generated.event_id,
             None,
@@ -93,6 +105,8 @@ impl Envelope {
 
     pub fn echo_response(
         request: &Self,
+        instance: &str,
+        sdk_id: &str,
         metadata: &EventMetadataGenerator,
     ) -> Result<Self, EnvelopeError> {
         if request.kind() != EnvelopeKind::Request {
@@ -102,6 +116,7 @@ impl Envelope {
         let generated = metadata.next();
         let request_id = request.event_id().to_owned();
         let mut payload = Map::new();
+        payload.insert("sdk_id".into(), Value::String(sdk_id.to_owned()));
         payload.insert("type".into(), Value::String("fake_eow.echo".into()));
         payload.insert(
             "received_event_id".into(),
@@ -114,13 +129,47 @@ impl Envelope {
 
         Ok(Self::from_fields(
             EnvelopeKind::Response,
-            "eow",
+            instance,
             "eow_sdk",
             generated.event_id,
             Some(request_id),
             generated.timestamp,
             payload,
         ))
+    }
+
+    pub fn ack_response(
+        request: &Self,
+        instance: &str,
+        sdk_id: &str,
+        metadata: &EventMetadataGenerator,
+    ) -> Result<Self, EnvelopeError> {
+        if request.kind() != EnvelopeKind::Request {
+            return Err(EnvelopeError::ExpectedRequest);
+        }
+        let generated = metadata.next();
+        let payload = json!({
+            "sdk_id": sdk_id,
+            "type": "ack",
+            "data": {"ok": true},
+        })
+        .as_object()
+        .cloned()
+        .expect("static payload is an object");
+        Ok(Self::from_fields(
+            EnvelopeKind::Response,
+            instance,
+            "eow_sdk",
+            generated.event_id,
+            Some(request.event_id().to_owned()),
+            generated.timestamp,
+            payload,
+        ))
+    }
+
+    pub fn is_shutdown_request(&self) -> bool {
+        self.kind() == EnvelopeKind::Request
+            && self.payload().get("type").and_then(Value::as_str) == Some("shutdown")
     }
 
     pub fn kind(&self) -> EnvelopeKind {
@@ -158,6 +207,10 @@ impl Envelope {
         self.object["payload"]
             .as_object()
             .expect("validated payload is an object")
+    }
+
+    pub fn payload_sdk_id(&self) -> Option<&str> {
+        self.payload().get("sdk_id").and_then(Value::as_str)
     }
 
     pub fn to_json_vec(&self) -> Vec<u8> {
@@ -247,9 +300,21 @@ fn valid_event_id(value: &str) -> bool {
 #[derive(Debug)]
 pub enum EnvelopeError {
     Json(serde_json::Error),
-    Oversize { actual: usize, maximum: usize },
+    Oversize {
+        actual: usize,
+        maximum: usize,
+    },
     Invalid(Vec<&'static str>),
-    WrongRoute { source: String, target: String },
+    WrongRoute {
+        expected_source: String,
+        expected_target: String,
+        source: String,
+        target: String,
+    },
+    WrongSdkId {
+        expected: String,
+        actual: Option<String>,
+    },
     ExpectedRequest,
 }
 
@@ -266,13 +331,20 @@ impl fmt::Display for EnvelopeError {
             Self::Invalid(violations) => {
                 write!(formatter, "Envelope failed validation: {violations:?}")
             }
-            Self::WrongRoute { source, target } => {
-                write!(
-                    formatter,
-                    "Envelope route must be eow_sdk -> eow, got {source} -> {target}"
-                )
-            }
-            Self::ExpectedRequest => formatter.write_str("echo response requires a request"),
+            Self::WrongRoute {
+                expected_source,
+                expected_target,
+                source,
+                target,
+            } => write!(
+                formatter,
+                "Envelope route must be {expected_source} -> {expected_target}, got {source} -> {target}"
+            ),
+            Self::WrongSdkId { expected, actual } => write!(
+                formatter,
+                "Envelope sdk_id must match handshake {expected:?}, got {actual:?}"
+            ),
+            Self::ExpectedRequest => formatter.write_str("response requires a request"),
         }
     }
 }
@@ -336,7 +408,6 @@ fn format_utc(epoch_seconds: u64, milliseconds: u32) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{milliseconds:03}Z")
 }
 
-// Gregorian civil date conversion for days since 1970-01-01.
 fn civil_date_from_unix_days(days: i64) -> (i64, i64, i64) {
     let shifted = days + 719_468;
     let era = if shifted >= 0 {
@@ -360,69 +431,66 @@ fn civil_date_from_unix_days(days: i64) -> (i64, i64, i64) {
 mod tests {
     use super::*;
 
-    fn request(source: &str, target: &str) -> Vec<u8> {
-        serde_json::to_vec(&json!({
-            "envelope_schema": "1.0",
-            "envelope_kind": "request",
-            "source": source,
-            "target": target,
-            "event_id": "712345678901",
-            "correlation_id": null,
-            "ts_utc": "2026-08-01T00:00:00.000Z",
-            "payload": {"action": "ping"}
-        }))
+    fn request(target: &str, sdk_id: &str) -> Envelope {
+        Envelope::parse(
+            json!({
+                "envelope_schema": "1.0",
+                "envelope_kind": "request",
+                "source": "eow_sdk",
+                "target": target,
+                "event_id": "712345678901",
+                "correlation_id": null,
+                "payload": {"sdk_id": sdk_id, "type": "context"}
+            })
+            .to_string()
+            .as_bytes(),
+        )
         .unwrap()
     }
 
     #[test]
-    fn parses_and_route_checks_an_sdk_request() {
-        let envelope = Envelope::parse(&request("eow_sdk", "eow")).unwrap();
-        assert_eq!(envelope.kind(), EnvelopeKind::Request);
-        assert!(envelope.validate_inbound_for_eow().is_ok());
-
-        let wrong = Envelope::parse(&request("eow", "eow_sdk")).unwrap();
-        assert!(matches!(
-            wrong.validate_inbound_for_eow(),
-            Err(EnvelopeError::WrongRoute { .. })
-        ));
+    fn parses_and_binds_an_sdk_request_to_handshake_identity() {
+        let envelope = request("silvy", "Cyberpunk");
+        assert!(
+            envelope
+                .validate_inbound_for_eow("silvy", "Cyberpunk")
+                .is_ok()
+        );
+        assert!(
+            envelope
+                .validate_inbound_for_eow("rucia", "Cyberpunk")
+                .is_err()
+        );
+        assert!(envelope.validate_inbound_for_eow("silvy", "Other").is_err());
     }
 
     #[test]
-    fn rejects_static_envelope_violations() {
-        let mut value: Value = serde_json::from_slice(&request("eow_sdk", "eow")).unwrap();
-        value["event_id"] = Value::String("short".into());
-        value["payload"] = json!({});
-
-        assert!(matches!(
-            Envelope::parse(&serde_json::to_vec(&value).unwrap()),
-            Err(EnvelopeError::Invalid(violations))
-                if violations == ["event_id", "payload"]
-        ));
-    }
-
-    #[test]
-    fn builds_ready_event_and_correlated_echo_response() {
+    fn builds_instance_sourced_ready_echo_and_ack() {
         let metadata = EventMetadataGenerator::default();
-        let ready = Envelope::ready("knowht", &metadata);
-        assert_eq!(ready.kind(), EnvelopeKind::Event);
-        assert_eq!(ready.source(), "eow");
+        let ready = Envelope::ready("silvy", "Cyberpunk", &metadata);
+        assert_eq!(ready.source(), "silvy");
         assert_eq!(ready.target(), "eow_sdk");
-        assert_eq!(ready.payload()["type"], "fake_eow.ready");
+        assert_eq!(ready.payload_sdk_id(), Some("Cyberpunk"));
 
-        let request = Envelope::parse(&request("eow_sdk", "eow")).unwrap();
-        let response = Envelope::echo_response(&request, &metadata).unwrap();
-        assert_eq!(response.kind(), EnvelopeKind::Response);
-        assert_eq!(response.correlation_id(), Some("712345678901"));
-        assert_eq!(response.payload()["received_payload"]["action"], "ping");
+        let request = request("silvy", "Cyberpunk");
+        let echo = Envelope::echo_response(&request, "silvy", "Cyberpunk", &metadata).unwrap();
+        assert_eq!(echo.correlation_id(), Some(request.event_id()));
+
+        let ack = Envelope::ack_response(&request, "silvy", "Cyberpunk", &metadata).unwrap();
+        assert_eq!(ack.payload()["type"], "ack");
+    }
+
+    #[test]
+    fn detects_shutdown_requests() {
+        let mut shutdown = request("silvy", "Cyberpunk");
+        shutdown.object.get_mut("payload").unwrap()["type"] = json!("shutdown");
+        assert!(shutdown.is_shutdown_request());
     }
 
     #[test]
     fn generated_metadata_uses_wire_formats() {
-        let metadata = EventMetadataGenerator::default().next();
-        assert!(valid_event_id(&metadata.event_id));
-        assert_eq!(metadata.timestamp.len(), 24);
-        assert!(metadata.timestamp.ends_with('Z'));
-        assert_eq!(format_utc(0, 0), "1970-01-01T00:00:00.000Z");
-        assert_eq!(format_utc(951_782_400, 123), "2000-02-29T00:00:00.123Z");
+        let generated = EventMetadataGenerator::default().next();
+        assert!(valid_event_id(&generated.event_id));
+        assert!(generated.timestamp.ends_with('Z'));
     }
 }

@@ -1,8 +1,8 @@
-//! SDK Envelope parsing and the six static validation rules.
-
+//! SDK Envelope parsing, registry validation, and connection-route checks.
 
 use serde_json::{Map, Value};
 
+use crate::endpoint::InstanceRegistry;
 use crate::error::EnvelopeError;
 use crate::event_id::EventId;
 use crate::limits::{MAX_ENVELOPE_BYTES, SDK_ENVELOPE_SCHEMA};
@@ -33,7 +33,6 @@ impl EnvelopeKind {
     }
 }
 
-/// The six and only six static Envelope violation classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnvelopeViolation {
     EnvelopeSchema,
@@ -57,8 +56,6 @@ impl EnvelopeViolation {
     }
 }
 
-/// A JSON object that passed the documented size limit and six static rules.
-/// Unknown and deliberately unchecked fields are retained verbatim.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SdkEnvelope {
     object: Map<String, Value>,
@@ -66,6 +63,14 @@ pub struct SdkEnvelope {
 
 impl SdkEnvelope {
     pub fn parse(bytes: &[u8]) -> Result<Self, EnvelopeError> {
+        let registry = InstanceRegistry::bundled()?;
+        Self::parse_with_registry(bytes, &registry)
+    }
+
+    pub fn parse_with_registry(
+        bytes: &[u8],
+        registry: &InstanceRegistry,
+    ) -> Result<Self, EnvelopeError> {
         if bytes.len() > MAX_ENVELOPE_BYTES {
             return Err(EnvelopeError::Oversize {
                 actual: bytes.len(),
@@ -73,10 +78,18 @@ impl SdkEnvelope {
             });
         }
         let value: Value = serde_json::from_slice(bytes)?;
-        Self::try_from_value(value)
+        Self::try_from_value_with_registry(value, registry)
     }
 
     pub fn try_from_value(value: Value) -> Result<Self, EnvelopeError> {
+        let registry = InstanceRegistry::bundled()?;
+        Self::try_from_value_with_registry(value, &registry)
+    }
+
+    pub fn try_from_value_with_registry(
+        value: Value,
+        registry: &InstanceRegistry,
+    ) -> Result<Self, EnvelopeError> {
         let serialized_len = serde_json::to_vec(&value)?.len();
         if serialized_len > MAX_ENVELOPE_BYTES {
             return Err(EnvelopeError::Oversize {
@@ -99,7 +112,7 @@ impl SdkEnvelope {
             }
         };
 
-        let violations = validate_object(&object);
+        let violations = validate_object(&object, registry);
         if violations.is_empty() {
             Ok(Self { object })
         } else {
@@ -107,8 +120,6 @@ impl SdkEnvelope {
         }
     }
 
-    /// Construct a normal outbound object, then pass it through the same validator.
-    /// `ts_utc` is inserted but intentionally not inspected.
     #[allow(clippy::too_many_arguments)]
     pub fn from_fields(
         kind: EnvelopeKind,
@@ -118,6 +129,30 @@ impl SdkEnvelope {
         correlation_id: Option<EventId>,
         ts_utc: Value,
         payload: Map<String, Value>,
+    ) -> Result<Self, EnvelopeError> {
+        let registry = InstanceRegistry::bundled()?;
+        Self::from_fields_with_registry(
+            kind,
+            source,
+            target,
+            event_id,
+            correlation_id,
+            ts_utc,
+            payload,
+            &registry,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_fields_with_registry(
+        kind: EnvelopeKind,
+        source: impl Into<String>,
+        target: impl Into<String>,
+        event_id: EventId,
+        correlation_id: Option<EventId>,
+        ts_utc: Value,
+        payload: Map<String, Value>,
+        registry: &InstanceRegistry,
     ) -> Result<Self, EnvelopeError> {
         let mut object = Map::new();
         object.insert(
@@ -136,7 +171,40 @@ impl SdkEnvelope {
         );
         object.insert("ts_utc".into(), ts_utc);
         object.insert("payload".into(), Value::Object(payload));
-        Self::try_from_value(Value::Object(object))
+        Self::try_from_value_with_registry(Value::Object(object), registry)
+    }
+
+    pub fn outbound_violations(&self, sdk_id: &str, registry: &InstanceRegistry) -> Vec<String> {
+        let mut violations = Vec::new();
+        if self.source() != "eow_sdk"
+            || self.target() == "eow_sdk"
+            || !registry.contains(self.target())
+        {
+            violations.push(EnvelopeViolation::SourceTarget.as_str().to_owned());
+        }
+        if self.payload_sdk_id() != Some(sdk_id) {
+            violations.push(EnvelopeViolation::Payload.as_str().to_owned());
+        }
+        violations
+    }
+
+    pub fn inbound_violations(
+        &self,
+        sdk_id: &str,
+        connected_instance: &str,
+        registry: &InstanceRegistry,
+    ) -> Vec<String> {
+        let mut violations = Vec::new();
+        if self.source() != connected_instance
+            || self.target() != "eow_sdk"
+            || !registry.contains(connected_instance)
+        {
+            violations.push(EnvelopeViolation::SourceTarget.as_str().to_owned());
+        }
+        if self.payload_sdk_id() != Some(sdk_id) {
+            violations.push(EnvelopeViolation::Payload.as_str().to_owned());
+        }
+        violations
     }
 
     pub fn as_object(&self) -> &Map<String, Value> {
@@ -162,6 +230,26 @@ impl SdkEnvelope {
             .expect("validated target is a string")
     }
 
+    pub fn event_id(&self) -> &str {
+        self.object["event_id"]
+            .as_str()
+            .expect("validated event_id is a string")
+    }
+
+    pub fn correlation_id(&self) -> Option<&str> {
+        self.object["correlation_id"].as_str()
+    }
+
+    pub fn payload(&self) -> &Map<String, Value> {
+        self.object["payload"]
+            .as_object()
+            .expect("validated payload is an object")
+    }
+
+    pub fn payload_sdk_id(&self) -> Option<&str> {
+        self.payload().get("sdk_id").and_then(Value::as_str)
+    }
+
     pub fn to_json_vec(&self) -> Vec<u8> {
         serde_json::to_vec(&self.object).expect("serde_json::Value always serializes")
     }
@@ -171,7 +259,10 @@ impl SdkEnvelope {
     }
 }
 
-fn validate_object(object: &Map<String, Value>) -> Vec<EnvelopeViolation> {
+fn validate_object(
+    object: &Map<String, Value>,
+    registry: &InstanceRegistry,
+) -> Vec<EnvelopeViolation> {
     let mut violations = Vec::new();
 
     if object.get("envelope_schema").and_then(Value::as_str) != Some(SDK_ENVELOPE_SCHEMA) {
@@ -188,7 +279,12 @@ fn validate_object(object: &Map<String, Value>) -> Vec<EnvelopeViolation> {
 
     let source = object.get("source").and_then(Value::as_str);
     let target = object.get("target").and_then(Value::as_str);
-    if source.is_none() || target.is_none() || source == target {
+    if source.is_none()
+        || target.is_none()
+        || source == target
+        || source.is_some_and(|value| !registry.contains(value))
+        || target.is_some_and(|value| !registry.contains(value))
+    {
         violations.push(EnvelopeViolation::SourceTarget);
     }
     if !object

@@ -1,6 +1,7 @@
 //! Twelve-digit SDK event IDs and injectable generation sources.
 
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -134,5 +135,35 @@ where
 
     pub fn into_sources(self) -> (C, R) {
         (self.clock, self.random)
+    }
+}
+
+static SYSTEM_RANDOM_SEED: AtomicU64 = AtomicU64::new(1);
+
+/// Small process-local pseudo-random source for the two-digit event ID suffix.
+#[derive(Debug)]
+pub struct SystemRandomNumber {
+    state: u64,
+}
+
+impl Default for SystemRandomNumber {
+    fn default() -> Self {
+        let elapsed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        let sequence = SYSTEM_RANDOM_SEED.fetch_add(1, Ordering::Relaxed);
+        let state = (elapsed.as_nanos() as u64) ^ sequence.rotate_left(17) | 1;
+        Self { state }
+    }
+}
+
+impl RandomNumber for SystemRandomNumber {
+    fn next_00_99(&mut self) -> u8 {
+        let mut value = self.state;
+        value ^= value << 13;
+        value ^= value >> 7;
+        value ^= value << 17;
+        self.state = value;
+        (value % 100) as u8
     }
 }

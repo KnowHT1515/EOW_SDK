@@ -1,5 +1,7 @@
 use eow_sdk_transport::limits::MAX_ENVELOPE_BYTES;
-use eow_sdk_transport::{EnvelopeError, EnvelopeKind, EnvelopeViolation, SdkEnvelope};
+use eow_sdk_transport::{
+    EnvelopeError, EnvelopeKind, EnvelopeViolation, InstanceRegistry, SdkEnvelope,
+};
 use serde_json::{Value, json};
 
 fn valid() -> Value {
@@ -7,10 +9,10 @@ fn valid() -> Value {
         "envelope_schema": "1.0",
         "envelope_kind": "request",
         "source": "eow_sdk",
-        "target": "eow",
+        "target": "silvy",
         "event_id": "712345678901",
         "correlation_id": null,
-        "payload": {"type": "startup"}
+        "payload": {"sdk_id": "Cyberpunk", "type": "startup"}
     })
 }
 
@@ -32,16 +34,43 @@ fn accepts_without_ts_utc_and_preserves_unknown_fields() {
 }
 
 #[test]
-fn does_not_validate_ts_endpoint_values_or_correlation_kind_rules() {
+fn endpoints_must_be_registered_instances_or_eow_sdk() {
     let mut value = valid();
-    value["source"] = json!("custom-a");
-    value["target"] = json!("custom-b");
-    value["ts_utc"] = json!({"not": "a timestamp"});
-    value["correlation_id"] = json!("700000000000");
+    value["target"] = json!("custom");
+    assert_eq!(violations(value), [EnvelopeViolation::SourceTarget]);
 
-    let envelope = SdkEnvelope::try_from_value(value).unwrap();
-    assert_eq!(envelope.source(), "custom-a");
-    assert_eq!(envelope.target(), "custom-b");
+    let mut no_port_is_still_registered = valid();
+    no_port_is_still_registered["target"] = json!("neuro");
+    assert!(SdkEnvelope::try_from_value(no_port_is_still_registered).is_ok());
+}
+
+#[test]
+fn connection_direction_and_sdk_id_are_contextual_rules() {
+    let registry = InstanceRegistry::bundled().unwrap();
+    let outbound = SdkEnvelope::try_from_value(valid()).unwrap();
+    assert!(
+        outbound
+            .outbound_violations("Cyberpunk", &registry)
+            .is_empty()
+    );
+    assert_eq!(
+        outbound.outbound_violations("Other", &registry),
+        ["payload"]
+    );
+
+    let mut inbound = valid();
+    inbound["source"] = json!("silvy");
+    inbound["target"] = json!("eow_sdk");
+    let inbound = SdkEnvelope::try_from_value(inbound).unwrap();
+    assert!(
+        inbound
+            .inbound_violations("Cyberpunk", "silvy", &registry)
+            .is_empty()
+    );
+    assert_eq!(
+        inbound.inbound_violations("Cyberpunk", "rucia", &registry),
+        ["source_target"]
+    );
 }
 
 #[test]
@@ -129,7 +158,7 @@ fn raw_input_over_size_limit_is_rejected_before_json_parsing() {
 #[test]
 fn serialized_value_honors_exact_size_boundary() {
     let mut value = valid();
-    value["payload"] = json!({"pad": ""});
+    value["payload"]["pad"] = json!("");
     let base_len = serde_json::to_vec(&value).unwrap().len();
     let pad_len = MAX_ENVELOPE_BYTES - base_len;
     value["payload"]["pad"] = json!("x".repeat(pad_len));

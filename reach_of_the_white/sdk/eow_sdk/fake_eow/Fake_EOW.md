@@ -1,38 +1,35 @@
 # Fake EOW
 
-`fake-eow` is a small TCP stand-in for `Echoes_of_the_White`. It exists tomake SDK connection behavior observable without starting the real repository.
-
-It intentionally implements the wire format independently from `eow-sdk-transport`. This keeps it useful as an external protocol peer instead of making both sides share the same framing and Envelope implementation.
+`fake-eow` is an independent TCP stand-in for `Echoes_of_the_White`. It deliberately does not reuse `eow-sdk-transport` framing, handshake, or Envelope code, so integration tests exercise the real wire contract from both sides.
 
 ## Fixed endpoint
 
-The bundled [port.json](port.json) defines the test endpoint:
+The bundled [instance.json](instance.json) defines:
 
 - instance: `knowht`
 - address: `127.0.0.1`
 - port: `7707`
 
-Run the server from the SDK workspace:
+Run it from the SDK workspace:
 
 ```powershell
 cargo run -p fake-eow
 ```
 
-The process runs until it is interrupted. Each SDK connection is handled in its own thread, so one invalid or disconnected client does not stop the listener.
+The process runs until interrupted. Tests may instead use `spawn_with_config` with port `0` to obtain an ephemeral endpoint and a stoppable server handle.
 
 ## Behavior
 
-1. The client sends a framed handshake request.
-2. The server accepts schema `1.0` with any non-empty SDK ID.
-3. An accepted connection receives a `fake_eow.ready` event.
-4. Every valid inbound SDK Envelope is logged.
-5. An inbound request receives a `fake_eow.echo` response whose `correlation_id` is the request's `event_id`.
-6. Inbound events and responses are logged without an automatic reply.
+1. The client sends a framed handshake containing schema and `sdk_id`.
+2. Schema `1.0` and a non-empty, currently inactive SDK ID are accepted.
+3. The session binds all later Envelopes to that handshake `sdk_id` and its own instance.
+4. An accepted connection receives an instance-sourced `fake_eow.ready` event.
+5. Ordinary requests receive a correlated `fake_eow.echo` response.
+6. A shutdown request receives a correlated `ack` and closes that session.
+7. Events and responses are logged without an automatic reply.
 
-Unsupported handshake schemas and empty SDK IDs receive `deny`. Malformed framing, handshakes, Envelopes, or Envelope routes close only the affected connection.
-
-Envelope JSON in logs is capped at 4096 characters so a maximum-size payload cannot flood the terminal.
+Malformed framing, handshakes, Envelopes, source/target routes, or mismatched payload `sdk_id` values close only the affected connection. Envelope JSON in logs is capped at 4096 characters.
 
 ## Scope
 
-This crate contains only the fake EOW server and its own unit tests. It does not implement the SDK Transport connection lifecycle and does not contain Transport-to-fake-EOW integration tests.
+The crate is a protocol peer and controllable integration fixture. SDK connection lifecycle, target routing, Recv Bucket ownership, and reconnect policy remain implemented and tested in `eow-sdk-transport`.

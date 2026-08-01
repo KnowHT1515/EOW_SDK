@@ -6,6 +6,7 @@ version = 4
 name = "eow-sdk-transport"
 version = "1.0.0"
 dependencies = [
+ "fake-eow",
  "serde_json",
 ]
 

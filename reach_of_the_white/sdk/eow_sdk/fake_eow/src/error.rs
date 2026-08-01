@@ -11,8 +11,10 @@ pub enum StartupError {
         address: SocketAddrV4,
         source: io::Error,
     },
+    LocalAddress(io::Error),
     Accept(io::Error),
     Spawn(io::Error),
+    WorkerPanicked,
 }
 
 impl fmt::Display for StartupError {
@@ -22,8 +24,12 @@ impl fmt::Display for StartupError {
             Self::Bind { address, source } => {
                 write!(formatter, "could not bind fake EOW to {address}: {source}")
             }
+            Self::LocalAddress(error) => {
+                write!(formatter, "could not inspect fake EOW address: {error}")
+            }
             Self::Accept(error) => write!(formatter, "could not accept SDK connection: {error}"),
-            Self::Spawn(error) => write!(formatter, "could not spawn SDK session: {error}"),
+            Self::Spawn(error) => write!(formatter, "could not spawn fake EOW worker: {error}"),
+            Self::WorkerPanicked => formatter.write_str("fake EOW worker panicked"),
         }
     }
 }
@@ -33,8 +39,8 @@ impl std::error::Error for StartupError {
         match self {
             Self::Config(error) => Some(error),
             Self::Bind { source, .. } => Some(source),
-            Self::Accept(error) => Some(error),
-            Self::Spawn(error) => Some(error),
+            Self::LocalAddress(error) | Self::Accept(error) | Self::Spawn(error) => Some(error),
+            Self::WorkerPanicked => None,
         }
     }
 }

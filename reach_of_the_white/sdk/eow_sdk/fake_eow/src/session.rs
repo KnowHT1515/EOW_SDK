@@ -1,7 +1,8 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::io;
 use std::net::{SocketAddr, TcpStream};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::envelope::{Envelope, EnvelopeError, EnvelopeKind, EventMetadataGenerator};
 use crate::frame::{self, FrameError};
@@ -14,6 +15,7 @@ pub fn run(
     peer: SocketAddr,
     instance: &str,
     metadata: Arc<EventMetadataGenerator>,
+    active_sdk_ids: Arc<Mutex<HashSet<String>>>,
 ) -> Result<(), SessionError> {
     stream.set_nodelay(true).map_err(SessionError::Socket)?;
 
@@ -29,9 +31,25 @@ pub fn run(
             "[HANDSHAKE] peer={peer} sdk_id={:?} schema={:?} result=deny",
             request.id, request.schema
         );
-        println!("[CLOSE] peer={peer} reason=handshake_denied");
         return Ok(());
     }
+
+    let inserted = active_sdk_ids
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(request.id.clone());
+    if !inserted {
+        frame::write_frame(&mut stream, &handshake::deny_body())?;
+        println!(
+            "[HANDSHAKE] peer={peer} sdk_id={:?} schema={:?} result=deny reason=duplicate",
+            request.id, request.schema
+        );
+        return Ok(());
+    }
+    let _active = ActiveSdkGuard {
+        sdk_id: request.id.clone(),
+        active: Arc::clone(&active_sdk_ids),
+    };
 
     frame::write_frame(&mut stream, &handshake::accept_body(instance))?;
     println!(
@@ -39,7 +57,7 @@ pub fn run(
         request.id, request.schema
     );
 
-    let ready = Envelope::ready(instance, &metadata);
+    let ready = Envelope::ready(instance, &request.id, &metadata);
     send_envelope(&mut stream, peer, &ready)?;
 
     loop {
@@ -48,13 +66,34 @@ pub fn run(
             return Ok(());
         };
         let envelope = Envelope::parse(&body)?;
-        envelope.validate_inbound_for_eow()?;
+        envelope.validate_inbound_for_eow(instance, &request.id)?;
         log_envelope("RECV", peer, &envelope);
 
+        if envelope.is_shutdown_request() {
+            let response = Envelope::ack_response(&envelope, instance, &request.id, &metadata)?;
+            send_envelope(&mut stream, peer, &response)?;
+            println!("[CLOSE] peer={peer} reason=shutdown");
+            return Ok(());
+        }
+
         if envelope.kind() == EnvelopeKind::Request {
-            let response = Envelope::echo_response(&envelope, &metadata)?;
+            let response = Envelope::echo_response(&envelope, instance, &request.id, &metadata)?;
             send_envelope(&mut stream, peer, &response)?;
         }
+    }
+}
+
+struct ActiveSdkGuard {
+    sdk_id: String,
+    active: Arc<Mutex<HashSet<String>>>,
+}
+
+impl Drop for ActiveSdkGuard {
+    fn drop(&mut self) {
+        self.active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.sdk_id);
     }
 }
 
