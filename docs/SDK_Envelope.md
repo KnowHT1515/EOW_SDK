@@ -29,6 +29,8 @@
 
 ### startup
 
+Requests registration of an `EOW_SDK` instance.
+
 ```json
 {
     "envelope_kind": "request",
@@ -39,9 +41,13 @@
 }
 ```
 
+Registers an `EOW_SDK` instance on the `EOW` side.
+
 ---
 
 ### shutdown
+
+Requests unregistration of an `EOW_SDK` instance.
 
 ```json
 {
@@ -53,9 +59,13 @@
 }
 ```
 
+Unregisters an `EOW_SDK` instance on the `EOW` side.
+
 ---
 
 ### context
+
+Requests the addition of contextual information.
 
 ```json
 {
@@ -71,9 +81,13 @@
 }
 ```
 
+Provides additional contextual information to `EOW`. `silent: true` means that `EOW` will remain silent, while `silent: false` means that `EOW` may respond.
+
 ---
 
 ### action.register
+
+Requests registration of an `action`, making it available.
 
 ```json
 {
@@ -121,9 +135,13 @@
 }
 ```
 
+Registers the `action` under this `EOW_SDK` instance on the `EOW` side, making it available for invocation at any time.
+
 ---
 
 ### action.unregister
+
+Requests unregistration of an `action`, making it unavailable.
 
 ```json
 {
@@ -141,9 +159,13 @@
 }
 ```
 
+Unregisters the `action` under this `EOW_SDK` instance on the `EOW` side, making it no longer available.
+
 ---
 
 ### action.update
+
+Requests an update to the list of available `action`s.
 
 ```json
 {
@@ -191,9 +213,13 @@
 }
 ```
 
+Fully replaces the list of available `action`s under this `EOW_SDK` instance on the `EOW` side.
+
 ---
 
 ### action.clear
+
+Requests that the list of available `action`s be cleared.
 
 ```json
 {   
@@ -206,9 +232,13 @@
 }
 ```
 
+Clears the entire list of available `action`s under this `EOW_SDK` instance on the `EOW` side.
+
 ---
 
 ### action.demand
+
+Requests that `EOW` select and use an `action`.
 
 ```json
 {
@@ -232,9 +262,13 @@
 }
 ```
 
+Requests that `EOW` select and use an `action` from the `actions` list. If `permanent_context: true`, the current request will be added to the persistent context of `EOW`; otherwise, it will be treated only as a temporary value and discarded after use.
+
 ---
 
 ### action.result
+
+Returns information about the execution of an `action` and its result.
 
 ```json
 {
@@ -251,6 +285,8 @@
     }
 }
 ```
+
+Returns the execution information and result of the `action` to `EOW`.
 
 ---
 
@@ -273,11 +309,13 @@
 }
 ```
 
-`<type>` inclues `[startup, action, ack]`
+`<type>` includes `[startup, action, ack]`
 
 ---
 
 ### startup
+
+Initialization information returned by `EOW` after a `startup` request. Currently, `EOW` returns an `ack` instead of this type of `SDK_Envelope`. This type of `SDK_Envelope` is retained for compatibility with `Neuro-SDK`.
 
 ```json
 {   /* Neuro-SDK compatible, not used in Echoes_of_the_White */ 
@@ -294,7 +332,11 @@
 }
 ```
 
+---
+
 ### action
+
+An `action` execution request initiated by `EOW`. The `EOW_SDK` instance processes the corresponding `action` behavior according to its own business logic.
 
 ```json
 {
@@ -319,6 +361,8 @@
 ---
 
 ### ack
+
+General `request` acknowledgment information returned by `EOW`.
 
 ```json
 {
@@ -363,8 +407,10 @@ Range: `00`–`99`
 
 ## correlation_id
 
-When `envelope_kind` is `response`, the value of `correlation_id` must be identical to the `event_id` of the corresponding original request, establishing a one-to-one mapping between the request and response.
+When `envelope_kind` is `response`, `correlation_id` must be a 12-digit ASCII numeric string matching `[0-9]{12}`.
 
-When `envelope_kind` is `request` or `event`, the value of `correlation_id` must be `null`.
+When `envelope_kind` is `request` or `event`, `correlation_id` must be `null`.
 
-Correlation is scoped to one active instance connection. A response must match and consume a pending request from the opposite direction on that same connection. Unknown, duplicate, already-consumed, and cross-instance correlations are rejected. Reconnecting an instance starts with empty correlation state.
+`correlation_id` is transport-independent metadata. `Transport` validates only its shape and does not require it to identify a request seen on the same TCP connection, nor does it track whether a value is known, duplicated, or already consumed. A service or client may apply stronger request-response semantics within its own business logic.
+
+When producing an acknowledgment or other direct response, implementations should normally copy the originating request's `event_id` into `correlation_id` for observability, but receivers must not depend on or enforce that convention at the transport layer.

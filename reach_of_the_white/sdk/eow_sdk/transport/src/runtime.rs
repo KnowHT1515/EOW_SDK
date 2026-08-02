@@ -1,6 +1,6 @@
 //! Process-wide multi-instance TCP client runtime.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::{Shutdown, SocketAddrV4, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::context::{InboundSink, context};
 use crate::endpoint::InstanceRegistry;
-use crate::envelope::{EnvelopeKind, SdkEnvelope};
+use crate::envelope::SdkEnvelope;
 use crate::error::{ConnectError, DisconnectError, EnvelopeError};
 use crate::handshake::{HandshakeRequest, HandshakeResponse};
 use crate::io::{FramedReader, FramedWriter};
@@ -41,70 +41,6 @@ impl SendResult {
 #[derive(Debug)]
 enum EnqueueError {
     Unavailable,
-    Violation(&'static str),
-}
-
-#[derive(Debug)]
-enum CorrelationTransition {
-    InsertOutbound(String),
-    RemoveInbound(String),
-    None,
-}
-
-#[derive(Debug, Default)]
-struct CorrelationState {
-    outbound_pending: HashSet<String>,
-    inbound_pending: HashSet<String>,
-}
-
-impl CorrelationState {
-    fn apply_outbound(
-        &mut self,
-        envelope: &SdkEnvelope,
-    ) -> Result<CorrelationTransition, EnqueueError> {
-        match envelope.envelope_kind() {
-            EnvelopeKind::Request => {
-                let event_id = envelope.event_id().to_owned();
-                if !self.outbound_pending.insert(event_id.clone()) {
-                    return Err(EnqueueError::Violation("event_id"));
-                }
-                Ok(CorrelationTransition::InsertOutbound(event_id))
-            }
-            EnvelopeKind::Response => {
-                let correlation_id = envelope
-                    .correlation_id()
-                    .expect("validated response has correlation_id")
-                    .to_owned();
-                if !self.inbound_pending.remove(&correlation_id) {
-                    return Err(EnqueueError::Violation("correlation_id"));
-                }
-                Ok(CorrelationTransition::RemoveInbound(correlation_id))
-            }
-            EnvelopeKind::Event => Ok(CorrelationTransition::None),
-        }
-    }
-
-    fn rollback_outbound(&mut self, transition: CorrelationTransition) {
-        match transition {
-            CorrelationTransition::InsertOutbound(event_id) => {
-                self.outbound_pending.remove(&event_id);
-            }
-            CorrelationTransition::RemoveInbound(correlation_id) => {
-                self.inbound_pending.insert(correlation_id);
-            }
-            CorrelationTransition::None => {}
-        }
-    }
-
-    fn accept_inbound(&mut self, envelope: &SdkEnvelope) -> bool {
-        match envelope.envelope_kind() {
-            EnvelopeKind::Request => self.inbound_pending.insert(envelope.event_id().to_owned()),
-            EnvelopeKind::Response => envelope
-                .correlation_id()
-                .is_some_and(|correlation_id| self.outbound_pending.remove(correlation_id)),
-            EnvelopeKind::Event => true,
-        }
-    }
 }
 
 enum WriterCommand {
@@ -115,7 +51,7 @@ enum WriterCommand {
 struct ConnectionHandle {
     instance: String,
     sender: Sender<WriterCommand>,
-    correlation: Arc<Mutex<CorrelationState>>,
+
     alive: Arc<AtomicBool>,
     control: TcpStream,
     writer: Option<JoinHandle<()>>,
@@ -123,18 +59,12 @@ struct ConnectionHandle {
 }
 
 impl ConnectionHandle {
-    fn enqueue(&self, envelope: &SdkEnvelope, body: Vec<u8>) -> Result<(), EnqueueError> {
+    fn enqueue(&self, body: Vec<u8>) -> Result<(), EnqueueError> {
         if !self.alive.load(Ordering::Acquire) {
             return Err(EnqueueError::Unavailable);
         }
 
-        let mut correlation = self
-            .correlation
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let transition = correlation.apply_outbound(envelope)?;
         if self.sender.send(WriterCommand::Body(body)).is_err() {
-            correlation.rollback_outbound(transition);
             return Err(EnqueueError::Unavailable);
         }
         Ok(())
@@ -234,12 +164,7 @@ impl TransportRuntime {
         connection.close()
     }
 
-    fn enqueue(
-        &self,
-        target: &str,
-        envelope: &SdkEnvelope,
-        body: Vec<u8>,
-    ) -> Result<(), EnqueueError> {
+    fn enqueue(&self, target: &str, body: Vec<u8>) -> Result<(), EnqueueError> {
         let connections = self
             .connections
             .lock()
@@ -247,7 +172,7 @@ impl TransportRuntime {
         connections
             .get(target)
             .ok_or(EnqueueError::Unavailable)?
-            .enqueue(envelope, body)
+            .enqueue(body)
     }
 }
 
@@ -331,10 +256,10 @@ pub fn send(sdk_envelope_json: String) -> SendResult {
     let target = envelope.target().to_owned();
     match context
         .runtime
-        .enqueue(&target, &envelope, sdk_envelope_json.into_bytes())
+        .enqueue(&target, sdk_envelope_json.into_bytes())
     {
         Ok(()) => SendResult::accepted(),
-        Err(EnqueueError::Violation(violation)) => SendResult::rejected(vec![violation.to_owned()]),
+
         Err(EnqueueError::Unavailable) => SendResult::rejected(Vec::new()),
     }
 }
@@ -405,7 +330,7 @@ fn establish_connection(
     let write_stream = stream.try_clone().map_err(ConnectError::Io)?;
     let control = stream;
     let (writer_tx, writer_rx) = mpsc::channel();
-    let correlation = Arc::new(Mutex::new(CorrelationState::default()));
+
     let alive = Arc::new(AtomicBool::new(true));
 
     let writer_alive = Arc::clone(&alive);
@@ -434,7 +359,7 @@ fn establish_connection(
         .map_err(ConnectError::Spawn)?;
 
     let reader_alive = Arc::clone(&alive);
-    let reader_correlation = Arc::clone(&correlation);
+
     let reader_sender = writer_tx.clone();
     let reader_sdk_id = sdk_id.to_owned();
     let reader_instance = instance.to_owned();
@@ -453,13 +378,7 @@ fn establish_connection(
                 {
                     break;
                 }
-                if !reader_correlation
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .accept_inbound(&envelope)
-                {
-                    break;
-                }
+
                 if inbound.send(envelope).is_err() {
                     break;
                 }
@@ -478,7 +397,7 @@ fn establish_connection(
     Ok(ConnectionHandle {
         instance: instance.to_owned(),
         sender: writer_tx,
-        correlation,
+
         alive,
         control,
         writer: Some(writer),
@@ -578,64 +497,6 @@ mod tests {
     }
 
     #[test]
-    fn correlation_state_is_per_direction_transactional_and_single_use() {
-        let mut state = CorrelationState::default();
-        let outbound_request = envelope(
-            "request",
-            "eow_sdk",
-            "silvy",
-            "712345678901",
-            None,
-            "Cyberpunk",
-        );
-        let transition = state.apply_outbound(&outbound_request).unwrap();
-        assert!(matches!(
-            state.apply_outbound(&outbound_request),
-            Err(EnqueueError::Violation("event_id"))
-        ));
-        state.rollback_outbound(transition);
-        state.apply_outbound(&outbound_request).unwrap();
-
-        let inbound_response = envelope(
-            "response",
-            "silvy",
-            "eow_sdk",
-            "712345678902",
-            Some("712345678901"),
-            "Cyberpunk",
-        );
-        assert!(state.accept_inbound(&inbound_response));
-        assert!(!state.accept_inbound(&inbound_response));
-
-        let inbound_request = envelope(
-            "request",
-            "silvy",
-            "eow_sdk",
-            "712345678903",
-            None,
-            "Cyberpunk",
-        );
-        assert!(state.accept_inbound(&inbound_request));
-        assert!(!state.accept_inbound(&inbound_request));
-
-        let outbound_response = envelope(
-            "response",
-            "eow_sdk",
-            "silvy",
-            "712345678904",
-            Some("712345678903"),
-            "Cyberpunk",
-        );
-        let transition = state.apply_outbound(&outbound_response).unwrap();
-        state.rollback_outbound(transition);
-        state.apply_outbound(&outbound_response).unwrap();
-        assert!(matches!(
-            state.apply_outbound(&outbound_response),
-            Err(EnqueueError::Violation("correlation_id"))
-        ));
-    }
-
-    #[test]
     fn silent_and_partial_handshakes_share_one_absolute_deadline() {
         for response in [None, Some(accepted_handshake("silvy")[..3].to_vec())] {
             let address = handshake_peer(response, Duration::from_millis(300));
@@ -711,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn reader_rejects_cross_connection_identity_sdk_id_and_unknown_correlation() {
+    fn reader_rejects_cross_connection_identity_and_sdk_id() {
         let invalid_envelopes = [
             json!({
                 "envelope_schema": "1.0",
@@ -730,15 +591,6 @@ mod tests {
                 "event_id": "712345678907",
                 "correlation_id": null,
                 "payload": {"sdk_id": "Other", "type": "spoof"}
-            }),
-            json!({
-                "envelope_schema": "1.0",
-                "envelope_kind": "response",
-                "source": "silvy",
-                "target": "eow_sdk",
-                "event_id": "712345678908",
-                "correlation_id": "712345678900",
-                "payload": {"sdk_id": "Cyberpunk", "type": "ack"}
             }),
         ];
 
@@ -767,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_enqueue_rolls_back_correlation_state() {
+    fn failed_enqueue_is_reported_as_unavailable() {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = listener.local_addr().unwrap();
         let peer = thread::spawn(move || listener.accept().unwrap().0);
@@ -776,11 +628,9 @@ mod tests {
 
         let (sender, receiver) = mpsc::channel();
         drop(receiver);
-        let correlation = Arc::new(Mutex::new(CorrelationState::default()));
         let connection = ConnectionHandle {
             instance: "silvy".to_owned(),
             sender,
-            correlation: Arc::clone(&correlation),
             alive: Arc::new(AtomicBool::new(true)),
             control,
             writer: None,
@@ -795,42 +645,54 @@ mod tests {
             "Cyberpunk",
         );
         assert!(matches!(
-            connection.enqueue(&request, request.to_json_vec()),
+            connection.enqueue(request.to_json_vec()),
             Err(EnqueueError::Unavailable)
         ));
-        assert!(
-            correlation
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .outbound_pending
-                .is_empty()
-        );
         drop(peer_stream);
         connection.close().unwrap();
     }
 
     #[test]
-    fn independent_connections_do_not_share_correlation_state() {
-        let request = envelope(
-            "request",
-            "eow_sdk",
-            "silvy",
-            "712345678909",
-            None,
+    fn reader_accepts_unknown_and_repeated_response_correlations() {
+        let response_envelope = json!({
+            "envelope_schema": "1.0",
+            "envelope_kind": "response",
+            "source": "silvy",
+            "target": "eow_sdk",
+            "event_id": "712345678908",
+            "correlation_id": "712345678900",
+            "payload": {"sdk_id": "Cyberpunk", "type": "ack"}
+        });
+        let mut response = accepted_handshake("silvy");
+        let frame = frame::encode(&serde_json::to_vec(&response_envelope).unwrap()).unwrap();
+        response.extend(&frame);
+        response.extend(frame);
+        let address = handshake_peer(Some(response), Duration::from_millis(300));
+        let (inbound, bucket) = mpsc::channel();
+        let connection = establish_connection(
             "Cyberpunk",
-        );
-        let response = envelope(
-            "response",
+            InstanceRegistry::bundled().unwrap(),
             "silvy",
-            "eow_sdk",
-            "712345678910",
-            Some("712345678909"),
-            "Cyberpunk",
+            address,
+            Duration::from_millis(100),
+            inbound,
+        )
+        .unwrap();
+
+        assert_eq!(
+            bucket
+                .recv_timeout(Duration::from_millis(200))
+                .unwrap()
+                .correlation_id(),
+            Some("712345678900")
         );
-        let mut first = CorrelationState::default();
-        let mut second = CorrelationState::default();
-        first.apply_outbound(&request).unwrap();
-        assert!(first.accept_inbound(&response));
-        assert!(!second.accept_inbound(&response));
+        assert_eq!(
+            bucket
+                .recv_timeout(Duration::from_millis(200))
+                .unwrap()
+                .correlation_id(),
+            Some("712345678900")
+        );
+        connection.close().unwrap();
     }
 }

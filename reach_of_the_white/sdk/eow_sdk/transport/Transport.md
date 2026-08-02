@@ -245,11 +245,11 @@ If the value is valid, the connection is considered fully established. Otherwise
 
 TCP establishment, writing the complete handshake request, and reading the complete response share one absolute deadline. The default is five seconds. Partial response bytes do not restart the deadline. Temporary socket timeouts are cleared after acceptance so a normally idle runtime connection remains valid.
 
-## Connection Correlation
+## Correlation
 
-Each active instance connection owns independent inbound and outbound pending-request sets. A `response` must consume a pending `request` from the opposite direction on that same connection. Unknown, duplicate, already-consumed, or cross-instance correlations are protocol violations. Disconnecting or reconnecting discards the old connection's pending state.
+`Transport` validates only the structural rule for `correlation_id`: it is `null` for `request` and `event`, and a 12-digit ASCII numeric string for `response`. It does not maintain pending-request sets or require a response to match a request observed on the same TCP connection. This permits request and response paths to use different transports or adapter processes.
 
-`Transport` validates only Envelope/session semantics. Message-specific payload schemas such as `startup`, `context`, or `action.*` remain the responsibility of the SDK message layer.
+Stronger correlation semantics, along with message-specific payload schemas such as `startup`, `context`, or `action.*`, remain the responsibility of the service or client business layer.
 
 ## Recv Bucket
 

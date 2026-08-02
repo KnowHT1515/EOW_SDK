@@ -15,7 +15,7 @@
 | context | context |
 | action.register | actions/register |
 | action.unregister | actions/unregister |
-| action.update | actions/unregister + actions/register |
+| action.update | 0/1 actions/unregister + 0/1 actions/register |
 | action.clear | actions/unregister |
 | action.demand | actions/force |
 | action.result | action/result |

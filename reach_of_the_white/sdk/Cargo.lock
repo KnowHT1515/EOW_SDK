@@ -36,10 +36,16 @@ version = "1.0.0"
 [[package]]
 name = "neuro-adapter-to-neuro-sdk"
 version = "1.0.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "neuro-client"
 version = "1.0.0"
+dependencies = [
+ "neuro-adapter-to-neuro-sdk",
+]
 
 [[package]]
 name = "proc-macro2"
