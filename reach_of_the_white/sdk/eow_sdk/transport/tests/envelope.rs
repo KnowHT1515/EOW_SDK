@@ -39,9 +39,14 @@ fn endpoints_must_be_registered_instances_or_eow_sdk() {
     value["target"] = json!("custom");
     assert_eq!(violations(value), [EnvelopeViolation::SourceTarget]);
 
-    let mut no_port_is_still_registered = valid();
-    no_port_is_still_registered["target"] = json!("neuro");
-    assert!(SdkEnvelope::try_from_value(no_port_is_still_registered).is_ok());
+    let mut registered = valid();
+    registered["target"] = json!("neuro");
+    assert!(SdkEnvelope::try_from_value(registered).is_ok());
+
+    let mut reserved_source = valid();
+    reserved_source["source"] = json!("silvy");
+    reserved_source["target"] = json!("eow_sdk");
+    assert!(SdkEnvelope::try_from_value(reserved_source).is_ok());
 }
 
 #[test]
@@ -107,6 +112,28 @@ fn each_documented_rule_has_exactly_one_violation_class() {
         violations(equal_endpoints),
         [EnvelopeViolation::SourceTarget]
     );
+}
+
+#[test]
+fn correlation_shape_depends_on_envelope_kind() {
+    let mut response = valid();
+    response["envelope_kind"] = json!("response");
+    assert_eq!(
+        violations(response.clone()),
+        [EnvelopeViolation::CorrelationId]
+    );
+    response["correlation_id"] = json!("712345678900");
+    assert!(SdkEnvelope::try_from_value(response).is_ok());
+
+    let mut request = valid();
+    request["correlation_id"] = json!("712345678900");
+    assert_eq!(violations(request), [EnvelopeViolation::CorrelationId]);
+
+    let mut event = valid();
+    event["envelope_kind"] = json!("event");
+    assert!(SdkEnvelope::try_from_value(event.clone()).is_ok());
+    event["correlation_id"] = json!("712345678900");
+    assert_eq!(violations(event), [EnvelopeViolation::CorrelationId]);
 }
 
 #[test]

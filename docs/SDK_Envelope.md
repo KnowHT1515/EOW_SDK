@@ -365,4 +365,6 @@ Range: `00`–`99`
 
 When `envelope_kind` is `response`, the value of `correlation_id` must be identical to the `event_id` of the corresponding original request, establishing a one-to-one mapping between the request and response.
 
-When `envelope_kind` is not `response`, the value of `correlation_id` should be `null`. However, a non-null value will not cause any consequences, as `EOW_SDK` does not use the `correlation_id` field when processing non-response envelopes.
+When `envelope_kind` is `request` or `event`, the value of `correlation_id` must be `null`.
+
+Correlation is scoped to one active instance connection. A response must match and consume a pending request from the opposite direction on that same connection. Unknown, duplicate, already-consumed, and cross-instance correlations are rejected. Reconnecting an instance starts with empty correlation state.

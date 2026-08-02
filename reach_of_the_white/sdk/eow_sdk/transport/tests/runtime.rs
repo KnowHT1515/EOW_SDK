@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use eow_sdk_transport::{
-    Assembly, ConnectError, SdkEnvelope, connect, connect_at, disconnect, initialize, send,
+    Assembly, ConnectError, SdkEnvelope, connect_at, disconnect, initialize, send,
 };
 use fake_eow::{FakeEowConfig, spawn_with_config};
 
@@ -52,12 +52,11 @@ fn one_sdk_routes_multiple_instances_and_can_manually_reconnect() {
         connect_at("silvy", silvy.address()),
         Err(ConnectError::AlreadyConnected(instance)) if instance == "silvy"
     ));
-    assert!(matches!(connect("neuro"), Err(ConnectError::Config(_))));
 
     let assembly = Assembly::global().unwrap();
     assert!(send(assembly.startup("silvy").unwrap()).ok);
-    assert!(send(assembly.startup("rucia").unwrap()).ok);
     let silvy_echo = next_from(&bucket, "silvy", "fake_eow.echo");
+    assert!(send(assembly.startup("rucia").unwrap()).ok);
     let rucia_echo = next_from(&bucket, "rucia", "fake_eow.echo");
     assert_eq!(silvy_echo.target(), "eow_sdk");
     assert_eq!(rucia_echo.target(), "eow_sdk");

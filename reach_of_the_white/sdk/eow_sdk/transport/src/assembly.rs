@@ -194,7 +194,7 @@ impl Assembly {
         correlation_id: Option<EventId>,
         payload: Map<String, Value>,
     ) -> AssemblyResult {
-        if target == "eow_sdk" || !self.context.registry.contains(target) {
+        if !self.context.registry.is_registered_instance(target) {
             return Err(AssemblyError::InvalidTarget(target.to_owned()));
         }
         let event_id = self

@@ -176,10 +176,7 @@ impl SdkEnvelope {
 
     pub fn outbound_violations(&self, sdk_id: &str, registry: &InstanceRegistry) -> Vec<String> {
         let mut violations = Vec::new();
-        if self.source() != "eow_sdk"
-            || self.target() == "eow_sdk"
-            || !registry.contains(self.target())
-        {
+        if self.source() != "eow_sdk" || !registry.is_registered_instance(self.target()) {
             violations.push(EnvelopeViolation::SourceTarget.as_str().to_owned());
         }
         if self.payload_sdk_id() != Some(sdk_id) {
@@ -197,7 +194,7 @@ impl SdkEnvelope {
         let mut violations = Vec::new();
         if self.source() != connected_instance
             || self.target() != "eow_sdk"
-            || !registry.contains(connected_instance)
+            || !registry.is_registered_instance(connected_instance)
         {
             violations.push(EnvelopeViolation::SourceTarget.as_str().to_owned());
         }
@@ -268,12 +265,11 @@ fn validate_object(
     if object.get("envelope_schema").and_then(Value::as_str) != Some(SDK_ENVELOPE_SCHEMA) {
         violations.push(EnvelopeViolation::EnvelopeSchema);
     }
-    if object
+    let envelope_kind = object
         .get("envelope_kind")
         .and_then(Value::as_str)
-        .and_then(EnvelopeKind::parse)
-        .is_none()
-    {
+        .and_then(EnvelopeKind::parse);
+    if envelope_kind.is_none() {
         violations.push(EnvelopeViolation::EnvelopeKind);
     }
 
@@ -282,8 +278,8 @@ fn validate_object(
     if source.is_none()
         || target.is_none()
         || source == target
-        || source.is_some_and(|value| !registry.contains(value))
-        || target.is_some_and(|value| !registry.contains(value))
+        || source.is_some_and(|value| !registry.is_envelope_endpoint(value))
+        || target.is_some_and(|value| !registry.is_envelope_endpoint(value))
     {
         violations.push(EnvelopeViolation::SourceTarget);
     }
@@ -295,9 +291,11 @@ fn validate_object(
         violations.push(EnvelopeViolation::EventId);
     }
 
-    let correlation_valid = match object.get("correlation_id") {
-        Some(Value::Null) => true,
-        Some(Value::String(value)) => EventId::is_valid(value),
+    let correlation_valid = match (envelope_kind, object.get("correlation_id")) {
+        (Some(EnvelopeKind::Response), Some(Value::String(value))) => EventId::is_valid(value),
+        (Some(EnvelopeKind::Request | EnvelopeKind::Event), Some(Value::Null)) => true,
+        (None, Some(Value::Null)) => true,
+        (None, Some(Value::String(value))) => EventId::is_valid(value),
         _ => false,
     };
     if !correlation_valid {

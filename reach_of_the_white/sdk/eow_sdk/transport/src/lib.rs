@@ -27,4 +27,6 @@ pub use event_id::{InvalidEventId, RandomNumberOutOfRange, SystemRandomNumber, U
 pub use frame::{DecodeResult, Deframer, FrameAbort};
 pub use handshake::{HandshakeRequest, HandshakeResponse};
 pub use io::{FramedReader, FramedWriter};
-pub use runtime::{SendResult, connect, connect_at, disconnect, send};
+pub use runtime::{
+    SendResult, connect, connect_at, connect_at_timeout, connect_timeout, disconnect, send,
+};

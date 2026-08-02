@@ -252,12 +252,11 @@ fn validate_object(object: &Map<String, Value>) -> Vec<&'static str> {
     if object.get("envelope_schema").and_then(Value::as_str) != Some(ENVELOPE_SCHEMA) {
         violations.push("envelope_schema");
     }
-    if object
+    let envelope_kind = object
         .get("envelope_kind")
         .and_then(Value::as_str)
-        .and_then(EnvelopeKind::parse)
-        .is_none()
-    {
+        .and_then(EnvelopeKind::parse);
+    if envelope_kind.is_none() {
         violations.push("envelope_kind");
     }
 
@@ -274,9 +273,11 @@ fn validate_object(object: &Map<String, Value>) -> Vec<&'static str> {
         violations.push("event_id");
     }
 
-    let correlation_valid = match object.get("correlation_id") {
-        Some(Value::Null) => true,
-        Some(Value::String(value)) => valid_event_id(value),
+    let correlation_valid = match (envelope_kind, object.get("correlation_id")) {
+        (Some(EnvelopeKind::Response), Some(Value::String(value))) => valid_event_id(value),
+        (Some(EnvelopeKind::Request | EnvelopeKind::Event), Some(Value::Null)) => true,
+        (None, Some(Value::Null)) => true,
+        (None, Some(Value::String(value))) => valid_event_id(value),
         _ => false,
     };
     if !correlation_valid {

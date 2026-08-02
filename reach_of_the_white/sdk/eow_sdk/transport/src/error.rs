@@ -56,6 +56,8 @@ impl From<ConfigError> for EnvelopeError {
 pub enum HandshakeError {
     Json(serde_json::Error),
     InvalidShape,
+    InvalidSdkId,
+    InvalidInstance,
 }
 
 impl fmt::Display for HandshakeError {
@@ -63,6 +65,8 @@ impl fmt::Display for HandshakeError {
         match self {
             Self::Json(error) => write!(f, "invalid handshake JSON: {error}"),
             Self::InvalidShape => write!(f, "invalid handshake message shape"),
+            Self::InvalidSdkId => write!(f, "invalid sdk_id in handshake"),
+            Self::InvalidInstance => write!(f, "invalid instance in handshake"),
         }
     }
 }
@@ -71,7 +75,7 @@ impl std::error::Error for HandshakeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Json(error) => Some(error),
-            Self::InvalidShape => None,
+            Self::InvalidShape | Self::InvalidSdkId | Self::InvalidInstance => None,
         }
     }
 }
@@ -87,13 +91,29 @@ pub enum ConfigError {
     Json(serde_json::Error),
     Io(io::Error),
     InvalidRoot,
-    InvalidEntry { index: usize },
-    EmptyInstance { index: usize },
-    InvalidPort { instance: String, port: String },
+    InvalidEntry {
+        index: usize,
+    },
+    InvalidInstance {
+        index: usize,
+        instance: String,
+    },
+    MissingRequiredPort {
+        index: usize,
+        instance: String,
+    },
+    InvalidPort {
+        instance: String,
+        port: String,
+    },
     DuplicateInstance(String),
+    DuplicatePort {
+        port: u16,
+        first_instance: String,
+        second_instance: String,
+    },
     ReservedInstance(String),
     UnknownInstance(String),
-    MissingPort(String),
 }
 
 impl fmt::Display for ConfigError {
@@ -105,8 +125,17 @@ impl fmt::Display for ConfigError {
             Self::InvalidEntry { index } => {
                 write!(f, "invalid instance registry entry at index {index}")
             }
-            Self::EmptyInstance { index } => {
-                write!(f, "empty instance in registry entry at index {index}")
+            Self::InvalidInstance { index, instance } => {
+                write!(
+                    f,
+                    "invalid instance {instance:?} in registry entry at index {index}"
+                )
+            }
+            Self::MissingRequiredPort { index, instance } => {
+                write!(
+                    f,
+                    "instance {instance:?} has no port in registry entry at index {index}"
+                )
             }
             Self::InvalidPort { instance, port } => {
                 write!(f, "invalid port {port:?} for instance {instance:?}")
@@ -114,6 +143,14 @@ impl fmt::Display for ConfigError {
             Self::DuplicateInstance(instance) => {
                 write!(f, "duplicate instance in registry: {instance:?}")
             }
+            Self::DuplicatePort {
+                port,
+                first_instance,
+                second_instance,
+            } => write!(
+                f,
+                "duplicate port {port} in registry for instances {first_instance:?} and {second_instance:?}"
+            ),
             Self::ReservedInstance(instance) => {
                 write!(
                     f,
@@ -121,9 +158,6 @@ impl fmt::Display for ConfigError {
                 )
             }
             Self::UnknownInstance(instance) => write!(f, "unknown EOW instance: {instance:?}"),
-            Self::MissingPort(instance) => {
-                write!(f, "EOW instance has no TCP port: {instance:?}")
-            }
         }
     }
 }
@@ -190,7 +224,7 @@ impl From<io::Error> for FramedIoError {
 
 #[derive(Debug)]
 pub enum InitError {
-    EmptySdkId,
+    InvalidSdkId,
     AlreadyInitialized,
     Config(ConfigError),
 }
@@ -198,7 +232,9 @@ pub enum InitError {
 impl fmt::Display for InitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::EmptySdkId => f.write_str("sdk_id must not be empty"),
+            Self::InvalidSdkId => f.write_str(
+                "sdk_id must be 1..=128 UTF-8 bytes without surrounding whitespace or control characters",
+            ),
             Self::AlreadyInitialized => f.write_str("EOW SDK transport is already initialized"),
             Self::Config(error) => write!(f, "could not initialize instance registry: {error}"),
         }
@@ -230,6 +266,7 @@ pub enum ConnectError {
     Handshake(HandshakeError),
     HandshakeClosed,
     HandshakeDenied,
+    HandshakeTimeout,
     UnsupportedSchema(String),
     InstanceMismatch { expected: String, actual: String },
     Spawn(io::Error),
@@ -248,6 +285,9 @@ impl fmt::Display for ConnectError {
             Self::Handshake(error) => write!(f, "handshake response failed: {error}"),
             Self::HandshakeClosed => f.write_str("EOW closed before replying to the handshake"),
             Self::HandshakeDenied => f.write_str("EOW denied the SDK handshake"),
+            Self::HandshakeTimeout => {
+                f.write_str("TCP connection and handshake exceeded the absolute deadline")
+            }
             Self::UnsupportedSchema(schema) => {
                 write!(f, "unsupported handshake schema: {schema:?}")
             }

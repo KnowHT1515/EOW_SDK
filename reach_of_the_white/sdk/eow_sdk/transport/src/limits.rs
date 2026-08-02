@@ -1,12 +1,16 @@
 //! Protocol limits and fixed wire constants.
 
 use std::net::Ipv4Addr;
+use std::time::Duration;
 
 /// The only SDK Envelope schema supported by this revision.
 pub const SDK_ENVELOPE_SCHEMA: &str = "1.0";
 
 /// The handshake schema emitted by this revision.
 pub const HANDSHAKE_SCHEMA: &str = "1.0";
+
+/// Maximum time allowed for TCP connection establishment and the complete handshake.
+pub const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Maximum serialized UTF-8 size of one SDK Envelope.
 pub const MAX_ENVELOPE_BYTES: usize = 15 * 1024 * 1024;

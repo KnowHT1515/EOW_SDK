@@ -2,6 +2,8 @@
 
 use serde_json::{Value, json};
 
+use crate::context::is_valid_sdk_id;
+use crate::endpoint::{RESERVED_SDK_ENDPOINT, is_valid_instance_name};
 use crate::error::HandshakeError;
 use crate::limits::HANDSHAKE_SCHEMA;
 
@@ -47,11 +49,15 @@ impl HandshakeRequest {
         let schema = handshake
             .get("schema")
             .and_then(Value::as_str)
+            .filter(|schema| !schema.is_empty())
             .ok_or(HandshakeError::InvalidShape)?;
         let id = handshake
             .get("id")
             .and_then(Value::as_str)
             .ok_or(HandshakeError::InvalidShape)?;
+        if !is_valid_sdk_id(id) {
+            return Err(HandshakeError::InvalidSdkId);
+        }
         Ok(Self::with_schema(schema, id))
     }
 }
@@ -88,6 +94,7 @@ impl HandshakeResponse {
         let schema = handshake
             .get("schema")
             .and_then(Value::as_str)
+            .filter(|schema| !schema.is_empty())
             .ok_or(HandshakeError::InvalidShape)?
             .to_owned();
         match handshake.get("result").and_then(Value::as_str) {
@@ -95,11 +102,16 @@ impl HandshakeResponse {
                 let instance = handshake
                     .get("instance")
                     .and_then(Value::as_str)
-                    .ok_or(HandshakeError::InvalidShape)?
-                    .to_owned();
-                Ok(Self::Accept { schema, instance })
+                    .ok_or(HandshakeError::InvalidShape)?;
+                if !is_valid_instance_name(instance) || instance == RESERVED_SDK_ENDPOINT {
+                    return Err(HandshakeError::InvalidInstance);
+                }
+                Ok(Self::Accept {
+                    schema,
+                    instance: instance.to_owned(),
+                })
             }
-            Some("deny") => Ok(Self::Deny { schema }),
+            Some("deny") if !handshake.contains_key("instance") => Ok(Self::Deny { schema }),
             _ => Err(HandshakeError::InvalidShape),
         }
     }

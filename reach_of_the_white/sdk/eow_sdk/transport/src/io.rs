@@ -1,6 +1,8 @@
 //! Connection-independent framed adapters over `std::io::Read` and `Write`.
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
+use std::net::TcpStream;
+use std::time::Instant;
 
 use crate::error::FramedIoError;
 use crate::frame::{self, Deframer};
@@ -62,6 +64,45 @@ impl<R: Read> FramedReader<R> {
 
     pub fn into_inner(self) -> R {
         self.inner
+    }
+}
+
+impl FramedReader<TcpStream> {
+    /// Read one complete frame under one absolute deadline. Partial reads do not
+    /// restart the deadline, and any bytes beyond the first frame remain buffered.
+    pub fn read_frame_until(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<Option<Vec<u8>>, FramedIoError> {
+        loop {
+            if let Some(body) = self
+                .deframer
+                .next_frame()
+                .map_err(FramedIoError::FrameAbort)?
+            {
+                return Ok(Some(body));
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(FramedIoError::Io(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "handshake deadline elapsed",
+                )));
+            }
+            self.inner.set_read_timeout(Some(remaining))?;
+            let read = self.inner.read(&mut self.chunk)?;
+            if read == 0 {
+                return if self.deframer.buffered_len() == 0 {
+                    Ok(None)
+                } else {
+                    Err(FramedIoError::TruncatedFrame)
+                };
+            }
+            self.deframer
+                .push(&self.chunk[..read])
+                .map_err(FramedIoError::FrameAbort)?;
+        }
     }
 }
 

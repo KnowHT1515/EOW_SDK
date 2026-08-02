@@ -11,6 +11,8 @@ use crate::runtime::TransportRuntime;
 
 pub type InboundSink = Sender<SdkEnvelope>;
 
+const MAX_SDK_ID_BYTES: usize = 128;
+
 pub(crate) struct SdkContext {
     pub(crate) sdk_id: String,
     pub(crate) registry: InstanceRegistry,
@@ -31,8 +33,8 @@ pub fn initialize_with_registry(
     registry: InstanceRegistry,
 ) -> Result<(), InitError> {
     let sdk_id = sdk_id.into();
-    if sdk_id.is_empty() {
-        return Err(InitError::EmptySdkId);
+    if !is_valid_sdk_id(&sdk_id) {
+        return Err(InitError::InvalidSdkId);
     }
 
     let context = SdkContext {
@@ -56,4 +58,11 @@ pub(crate) fn context() -> Option<&'static SdkContext> {
 
 pub fn sdk_id() -> Option<&'static str> {
     context().map(|context| context.sdk_id.as_str())
+}
+
+pub(crate) fn is_valid_sdk_id(sdk_id: &str) -> bool {
+    !sdk_id.is_empty()
+        && sdk_id.len() <= MAX_SDK_ID_BYTES
+        && sdk_id.trim() == sdk_id
+        && !sdk_id.chars().any(char::is_control)
 }

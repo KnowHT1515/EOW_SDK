@@ -1,8 +1,10 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::sync::mpsc;
 
 use eow_sdk_transport::{
     ConfigError, EventId, EventIdClock, EventIdGenerator, HandshakeError, HandshakeRequest,
-    HandshakeResponse, InstanceRegistry, RandomNumber, RandomNumberOutOfRange, UtcTime,
+    HandshakeResponse, InitError, InstanceRegistry, RandomNumber, RandomNumberOutOfRange, UtcTime,
+    initialize,
 };
 
 #[test]
@@ -73,23 +75,21 @@ fn accepted_handshake_requires_instance_but_deny_does_not() {
 }
 
 #[test]
-fn bundled_registry_resolves_string_ports_and_keeps_no_port_instances() {
+fn bundled_registry_resolves_every_registered_instance() {
     let registry = InstanceRegistry::bundled().unwrap();
     assert_eq!(registry.len(), 3);
-    assert_eq!(
-        registry.resolve("silvy").unwrap().address,
-        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7107)
-    );
-    assert_eq!(
-        registry.resolve("rucia").unwrap().address,
-        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7507)
-    );
-    assert!(registry.contains("neuro"));
-    assert!(registry.contains("eow_sdk"));
-    assert!(matches!(
-        registry.resolve("neuro"),
-        Err(ConfigError::MissingPort(instance)) if instance == "neuro"
-    ));
+    for (instance, port) in [("silvy", 7107), ("rucia", 7507), ("neuro", 1219)] {
+        assert!(registry.is_registered_instance(instance));
+        assert!(registry.is_envelope_endpoint(instance));
+        assert_eq!(registry.port(instance), Some(port));
+        assert_eq!(
+            registry.resolve(instance).unwrap().address,
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)
+        );
+    }
+    assert!(!registry.is_registered_instance("eow_sdk"));
+    assert!(registry.is_envelope_endpoint("eow_sdk"));
+    assert!(!registry.is_envelope_endpoint("missing"));
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn explicit_endpoint_requires_a_registered_instance() {
 }
 
 #[test]
-fn registry_rejects_invalid_entries_and_non_string_ports() {
+fn registry_rejects_invalid_entries_ports_and_names() {
     assert!(matches!(
         InstanceRegistry::from_json(
             r#"[
@@ -118,18 +118,103 @@ fn registry_rejects_invalid_entries_and_non_string_ports() {
         ),
         Err(ConfigError::DuplicateInstance(instance)) if instance == "silvy"
     ));
+    assert!(matches!(
+        InstanceRegistry::from_json(
+            r#"[
+                {"instance":"silvy","port":"7107"},
+                {"instance":"rucia","port":"7107"}
+            ]"#
+        ),
+        Err(ConfigError::DuplicatePort { port: 7107, .. })
+    ));
+    assert!(matches!(
+        InstanceRegistry::from_json(r#"[{"instance":"silvy"}]"#),
+        Err(ConfigError::MissingRequiredPort { .. })
+    ));
     for json in [
+        r#"[{"instance":"silvy","port":""}]"#,
         r#"[{"instance":"silvy","port":"0"}]"#,
         r#"[{"instance":"silvy","port":"65536"}]"#,
+        r#"[{"instance":"silvy","port":"+7107"}]"#,
+        r#"[{"instance":"silvy","port":" 7107"}]"#,
         r#"[{"instance":"silvy","port":7107}]"#,
+        r#"[{"instance":"silvy","port":null}]"#,
     ] {
         assert!(matches!(
             InstanceRegistry::from_json(json),
             Err(ConfigError::InvalidPort { .. })
         ));
     }
+    for instance in [
+        "",
+        "Silvy",
+        " silvy",
+        "silvy ",
+        "silvy/path",
+        "a.b",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ] {
+        let json = format!(r#"[{{"instance":"{instance}","port":"7107"}}]"#);
+        assert!(matches!(
+            InstanceRegistry::from_json(&json),
+            Err(ConfigError::InvalidInstance { .. })
+        ));
+    }
     assert!(matches!(
-        InstanceRegistry::from_json(r#"[{"instance":"eow_sdk"}]"#),
+        InstanceRegistry::from_json(r#"[{"instance":"eow_sdk","port":"7107"}]"#),
         Err(ConfigError::ReservedInstance(_))
+    ));
+}
+
+#[test]
+fn sdk_id_and_handshake_identities_are_bounded() {
+    for invalid in [
+        String::new(),
+        " Cyberpunk".to_owned(),
+        "Cyberpunk ".to_owned(),
+        "Cyber\nPunk".to_owned(),
+        "x".repeat(129),
+    ] {
+        let (inbound, _bucket) = mpsc::channel();
+        assert!(matches!(
+            initialize(invalid, inbound),
+            Err(InitError::InvalidSdkId)
+        ));
+    }
+
+    for invalid in ["", " Cyberpunk", "Cyberpunk ", "Cyber\nPunk"] {
+        let body = serde_json::json!({
+            "handshake": {"schema": "1.0", "id": invalid}
+        })
+        .to_string();
+        assert!(HandshakeRequest::parse(body.as_bytes()).is_err());
+    }
+
+    for invalid in ["Silvy", "silvy/path", "eow_sdk"] {
+        let body = serde_json::json!({
+            "handshake": {
+                "schema": "1.0",
+                "result": "accept",
+                "instance": invalid
+            }
+        })
+        .to_string();
+        assert!(matches!(
+            HandshakeResponse::parse(body.as_bytes()),
+            Err(HandshakeError::InvalidInstance)
+        ));
+    }
+
+    assert!(matches!(
+        HandshakeResponse::parse(
+            br#"{"handshake":{"schema":"1.0","result":"deny","instance":"silvy"}}"#
+        ),
+        Err(HandshakeError::InvalidShape)
+    ));
+    assert!(matches!(
+        HandshakeResponse::parse(
+            br#"{"handshake":{"schema":"","result":"accept","instance":"silvy"}}"#
+        ),
+        Err(HandshakeError::InvalidShape)
     ));
 }

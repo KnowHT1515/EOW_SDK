@@ -52,7 +52,7 @@ Every endpoint other than the reserved `eow_sdk` value must be registered in `tr
 - Whether the value of `envelope_kind` is a valid enumeration value
 - Whether both `source` and `target` are present, have different values, and are either `eow_sdk` or an instance registered in `instance.json`
 - Whether `event_id` is a `12-digit numeric string`
-- Whether `correlation_id` is either `null` or a `12-digit numeric string`
+- Whether `correlation_id` is a `12-digit numeric string` for `response`, and `null` for `request` or `event`
 - Whether `payload` is present and is a non-empty object
 
 If any validation fails, the `SDK_Envelope` must not be created.
@@ -193,13 +193,15 @@ By default, the project uses `127.0.0.1` over IPv4 as the connection address.
 
 An `EOW_SDK` instance connects to a specified `EOW` instance using either externally supplied parameters or internally predefined settings.
 
-Registered instances and their optional ports are stored in `transport/instance.json`. A `port` is a string representation of an integer in `1..=65535`. An instance without a `port` is a legal Envelope endpoint but cannot be connected through TCP.
+Every registered instance in `transport/instance.json` must carry a unique `port`, represented as a string integer in `1..=65535`. Missing, empty, non-string, zero, out-of-range, and duplicate ports make the registry invalid and fail initialization.
+
+An instance name must match `[a-z][a-z0-9_-]{0,63}`. The reserved `eow_sdk` endpoint is legal in an Envelope but must not be registered and cannot be connected.
 
 ---
 
 #### Handshake
 
-The handshake between `EOW_SDK` and `Echoes_of_the_White` must follow the specification below.
+The handshake between `EOW_SDK` and `Echoes_of_the_White` must follow the specification below. The `sdk_id` must contain `1..=128` UTF-8 bytes without surrounding whitespace or control characters.
 
 First, `EOW_SDK` sends the following message to `EOW`:
 
@@ -241,6 +243,14 @@ Finally, when `result` is `accept`, `EOW_SDK` verifies whether the returned `<in
 
 If the value is valid, the connection is considered fully established. Otherwise, `EOW_SDK` closes the connection.
 
+TCP establishment, writing the complete handshake request, and reading the complete response share one absolute deadline. The default is five seconds. Partial response bytes do not restart the deadline. Temporary socket timeouts are cleared after acceptance so a normally idle runtime connection remains valid.
+
+## Connection Correlation
+
+Each active instance connection owns independent inbound and outbound pending-request sets. A `response` must consume a pending `request` from the opposite direction on that same connection. Unknown, duplicate, already-consumed, or cross-instance correlations are protocol violations. Disconnecting or reconnecting discards the old connection's pending state.
+
+`Transport` validates only Envelope/session semantics. Message-specific payload schemas such as `startup`, `context`, or `action.*` remain the responsibility of the SDK message layer.
+
 ## Recv Bucket
 
 Since inbound `SDK_Envelope`s are generally low-frequency, EOW_SDK owns one unbounded Recv Bucket and gives Transport its producer. Every connected instance writes validated Envelopes into that bucket. FIFO is guaranteed within each TCP connection; across instances, processing order is the actual order in which Envelopes enter the bucket. Transport does not expose a user-facing `recv` API.
@@ -259,9 +269,10 @@ Connects the process-wide SDK identity to one registered EOW instance. TCP conne
 
 ```rust
 fn connect(instance: &str) -> Result<(), ConnectError>;
+fn connect_timeout(instance: &str, timeout: Duration) -> Result<(), ConnectError>;
 ```
 
-An instance without a registered port cannot be connected. Connecting an already-active instance is rejected. Other instance connections are unaffected.
+`connect` uses the five-second default absolute handshake deadline; `connect_timeout` accepts an explicit deadline duration. Connecting an already-active instance is rejected. Other instance connections are unaffected.
 
 ---
 
