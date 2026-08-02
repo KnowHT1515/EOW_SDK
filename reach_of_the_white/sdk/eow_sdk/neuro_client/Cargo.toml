@@ -1,0 +1,8 @@
+[package]
+name = "neuro-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Neuro Client for Neuro-sama"
+
+[dependencies]
