@@ -1,12 +1,8 @@
-# Format
+# SDK_Envelope
 
 ---
 
-## SDK_Envelope
-
----
-
-### Send
+## Send
 
 ```json
 {
@@ -31,7 +27,7 @@
 
 ---
 
-#### startup
+### startup
 
 ```json
 {
@@ -45,7 +41,7 @@
 
 ---
 
-#### shutdown
+### shutdown
 
 ```json
 {
@@ -59,7 +55,7 @@
 
 ---
 
-#### context
+### context
 
 ```json
 {
@@ -77,7 +73,7 @@
 
 ---
 
-#### action.register
+### action.register
 
 ```json
 {
@@ -127,7 +123,7 @@
 
 ---
 
-#### action.unregister
+### action.unregister
 
 ```json
 {
@@ -147,7 +143,7 @@
 
 ---
 
-#### action.update
+### action.update
 
 ```json
 {
@@ -197,7 +193,7 @@
 
 ---
 
-#### action.clear
+### action.clear
 
 ```json
 {   
@@ -212,7 +208,7 @@
 
 ---
 
-#### action.demand
+### action.demand
 
 ```json
 {
@@ -238,7 +234,7 @@
 
 ---
 
-#### action.result
+### action.result
 
 ```json
 {
@@ -258,7 +254,7 @@
 
 ---
 
-### Recv
+## Recv
 
 ```json
 {
@@ -281,7 +277,7 @@
 
 ---
 
-#### startup
+### startup
 
 ```json
 {   /* Neuro-SDK compatible, not used in Echoes_of_the_White */ 
@@ -298,7 +294,7 @@
 }
 ```
 
-#### action
+### action
 
 ```json
 {
@@ -322,7 +318,7 @@
 
 ---
 
-#### ack
+### ack
 
 ```json
 {
@@ -339,7 +335,7 @@
 
 ---
 
-### event_id
+## event_id
 
 The `event_id` is a 12-digit **numeric string** with the following structure:
 
@@ -347,203 +343,26 @@ The `event_id` is a 12-digit **numeric string** with the following structure:
 
 ---
 
-#### Code
+### Code
 
 Fixed as `7`, the personal code assigned to KnowHT, the creator of this project.
 
 ---
 
-#### Timestamp
+### Timestamp
 
 Formatted as `HHMMSSMMM`, representing hours, minutes, seconds, and milliseconds in UTC.
 
 ---
 
-#### Random Number
+### Random Number
 
 Range: `00`–`99`
 
 ---
 
-### correlation_id
+## correlation_id
 
 When `envelope_kind` is `response`, the value of `correlation_id` must be identical to the `event_id` of the corresponding original request, establishing a one-to-one mapping between the request and response.
 
 When `envelope_kind` is not `response`, the value of `correlation_id` should be `null`. However, a non-null value will not cause any consequences, as `EOW_SDK` does not use the `correlation_id` field when processing non-response envelopes.
-
----
-
-## Neuro-SDK
-
----
-
-### Send
-
----
-
-#### startup
-
-```json
-{
-    "command": "startup",
-    "game": "<game_name>"
-}
-```
-
----
-
-#### context
-
-```json
-{
-    "command": "context",
-    "game": "<game_name>",
-    "data": {
-        "message": "<context_message>",
-        "silent": <bool>
-    }
-}
-```
-
----
-
-#### actions/register
-
-```json
-{
-    "command": "actions/register",
-    "game": "<game_name>",
-    "data": {
-        "actions": [
-            {
-                "name": "<action_name>",
-                "description": "<action_description>"
-            },
-            {
-                "name": "<action_name>",
-                "description": "<action_description>",
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "<argument_name>": {
-                            "type": "string",
-                            "enum": [
-                                "<value>",
-                                "<value>",
-                                ...
-                            ]
-                        },
-                        "<argument_name>": {
-                            "type": "integer",
-                            "minimum": <int>,
-                            "maximum": <int>
-                        },
-                        "<argument_name>": {
-                            "type": "boolean"
-                        },
-                        ...
-                    },
-                    "required": [
-                        "<argument_name>",
-                        "<argument_name>",
-                        ...
-                    ]
-                }
-            },
-            ...
-        ]
-    }
-}
-```
-
----
-
-#### actions/unregister
-
-```json
-{
-    "command": "actions/unregister",
-    "game": "<game_name>",
-    "data": {
-        "action_names": [
-            "<action_name>",
-            "<action_name>",
-            ...
-        ]
-    }
-}
-```
-
----
-
-#### actions/force
-
-```json
-{
-    "command": "actions/force",
-    "game": "<game_name>",
-    "data": {
-        "state": "<game_state>",    // Optional
-        "query": "<action_instruction>",
-        "ephemeral_context": <bool>,
-        "priority": "low" | "medium" | "high" | "critical",
-        "action_names": [
-            "<action_name>",
-            "<action_name>",
-            ...
-        ]
-    }
-}
-```
-
----
-
-#### action/result
-
-```json
-{
-    "command": "action/result",
-    "game": "<game_name>",
-    "data": {
-        "id": "<action_instance_id>",
-        "success": <bool>,
-        "message": "<result_message>"
-    }
-}
-```
-
----
-
-### Recv
-
----
-
-#### startup
-
-```json
-{
-    "command": "startup",
-    "data": {
-        "session": {
-            "sessionId": "<session_id>",
-            "characterId": "<character_id>",
-            "displayName": "<display_name>"
-        }
-    }
-}
-```
-
----
-
-#### action
-
-```json
-{
-    "command": "action",
-    "data": {
-        "id": "<action_instance_id>",
-        "name": "<action_name>",
-        "data": "{\"<argument_name>\":\"<value>\",\"<argument_name>\":<int>,\"<argument_name>\":<bool>,...}"
-    }
-}
-```
