@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Public API documentation is intentionally incremental; keep compiler output actionable. -->
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+</Project>
