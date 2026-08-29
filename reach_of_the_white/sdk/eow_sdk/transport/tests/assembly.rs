@@ -23,6 +23,23 @@ fn assembly_uses_global_sdk_id_and_call_specific_targets() {
     assert_eq!(context["target"], "rucia");
     assert_eq!(context["payload"]["data"]["silent"], true);
 
+    let snapshot: serde_json::Value = serde_json::from_str(
+        &assembly
+            .state_snapshot(
+                "silvy",
+                0,
+                Map::from_iter([("scene".into(), json!({"room": "start", "hp": 3}))]),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(snapshot["envelope_kind"], "event");
+    assert_eq!(snapshot["correlation_id"], serde_json::Value::Null);
+    assert_eq!(snapshot["payload"]["type"], "state");
+    assert_eq!(snapshot["payload"]["kind"], "snapshot");
+    assert_eq!(snapshot["payload"]["revision"], 0);
+    assert_eq!(snapshot["payload"]["data"]["scene"]["hp"], 3);
+
     let action = SdkAction {
         action_id: "open_door".into(),
         description: "Open the selected door".into(),

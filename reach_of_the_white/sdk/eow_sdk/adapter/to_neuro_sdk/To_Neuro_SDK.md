@@ -14,6 +14,8 @@ The `(from_eow_sdk_)to_neuro_sdk` component of the `Neuro Adapter` enables Neuro
 
 For the EOW API → Neuro API translation specification implemented by `E2NA`, see [Neuro Adapter].
 
+`state.snapshot` is intentionally unsupported. E2NA treats it as an invalid business payload and does not translate or forward its `data` to Neuro-SDK.
+
 [Neuro Adapter]: ../../../../../docs/Neuro_Adapter.md
 
 ---

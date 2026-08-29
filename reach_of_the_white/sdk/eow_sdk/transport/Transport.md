@@ -87,6 +87,13 @@ fn context(
     silent: bool,
 ) -> AssemblyResult
 
+fn state_snapshot(
+    &self,
+    target: &str,
+    revision: u64,
+    data: Map<String, Value>,
+) -> AssemblyResult
+
 fn action_register(
     &self,
     target: &str,
@@ -125,6 +132,8 @@ fn action_result(
 
 type AssemblyResult = Result<String, AssemblyError>;
 ```
+
+`Assembly` does not store state-session counters. The caller supplies `revision`, starts from zero after the target's startup succeeds, and advances it for each complete snapshot it produces.
 
 ---
 
@@ -278,7 +287,7 @@ fn connect_timeout(instance: &str, timeout: Duration) -> Result<(), ConnectError
 
 ### disconnect
 
-Closes one instance connection without sending a business-level shutdown Envelope. Already accepted outbound frames are drained in FIFO order before the socket and workers are closed.
+Closes one instance connection without sending a business-level shutdown Envelope. Surviving accepted outbound frames are drained in enqueue order before the socket and workers are closed. A nonzero state snapshot that was superseded before transmission is no longer a surviving frame.
 
 ```rust
 fn disconnect(instance: &str) -> Result<(), DisconnectError>;
@@ -307,4 +316,8 @@ struct SendResult {
 
 `send` validates the Envelope, reads its `target`, and synchronously enqueues it on that instance connection. It returns an acceptance result as `SendResult`.
 
-The semantics of `SendResult.ok` are **accepted**, not **delivered**. `SendResult.ok == true` only indicates that the `SDK_Envelope` has entered the target connection writer queue and does **not guarantee** that the `target` has received it. Delivery-level failures are not represented by `SendResult`.
+Each target connection keeps ordinary Envelopes in the existing unbounded reliable FIFO. A valid `state.snapshot` uses a separate latest-only pending slot with capacity one instead, so high-frequency snapshots cannot grow the ordinary FIFO. A new nonzero snapshot atomically replaces the pending nonzero snapshot; `data` is never merged. The pending `revision: 0` baseline cannot be replaced within the same startup session. A new startup session permits its own revision-zero baseline to replace an unsent baseline from an older session.
+
+The writer compares enqueue sequence numbers so ordinary Envelopes and the surviving snapshot retain their relative enqueue order. At most one snapshot is being written and one latest snapshot is pending. Because every snapshot is complete, skipped revisions require no reconstruction by the receiver.
+
+The semantics of `SendResult.ok` are **accepted**, not **delivered**. `SendResult.ok == true` indicates acceptance by the target connection's outbound policy and does **not guarantee** that the `target` has received it. In particular, an accepted nonzero snapshot may be superseded before TCP transmission. Delivery-level failures are not represented by `SendResult`.

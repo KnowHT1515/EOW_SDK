@@ -22,6 +22,7 @@ internal static class TransportTests
         TestEventIds();
         TestHandshake();
         TestEnvelope();
+        await TestOutboundQueueAsync();
         await TestRuntimeAndAssemblyAsync();
         Console.WriteLine("All EowSdk.Transport tests passed.");
     }
@@ -168,6 +169,57 @@ internal static class TransportTests
             "stable six violations");
     }
 
+    private static async Task TestOutboundQueueAsync()
+    {
+        var queue = new OutboundQueue();
+        True(queue.TryEnqueue("ordinary-before"u8.ToArray(), OutboundClass.Reliable),
+            "ordinary enqueue");
+        True(queue.TryEnqueue("snapshot-1"u8.ToArray(), OutboundClass.Snapshot(1)),
+            "first snapshot enqueue");
+        True(queue.TryEnqueue("ordinary-between"u8.ToArray(), OutboundClass.Reliable),
+            "second ordinary enqueue");
+        True(queue.TryEnqueue("snapshot-2"u8.ToArray(), OutboundClass.Snapshot(2)),
+            "replacement snapshot enqueue");
+        queue.Close();
+
+        Equal("ordinary-before", Encoding.UTF8.GetString((await queue.DequeueAsync())!),
+            "ordinary before snapshot");
+        Equal("ordinary-between", Encoding.UTF8.GetString((await queue.DequeueAsync())!),
+            "surviving enqueue order");
+        Equal("snapshot-2", Encoding.UTF8.GetString((await queue.DequeueAsync())!),
+            "latest snapshot survives");
+        True(await queue.DequeueAsync() is null, "closed queue drained");
+
+        var baseline = new OutboundQueue();
+        True(baseline.TryEnqueue("snapshot-0"u8.ToArray(), OutboundClass.Snapshot(0)),
+            "baseline enqueue");
+        True(baseline.TryEnqueue("snapshot-1"u8.ToArray(), OutboundClass.Snapshot(1)),
+            "post-baseline snapshot accepted");
+        True(baseline.TryEnqueue("ordinary"u8.ToArray(), OutboundClass.Reliable),
+            "ordinary after baseline");
+        baseline.Close();
+
+        Equal("snapshot-0", Encoding.UTF8.GetString((await baseline.DequeueAsync())!),
+            "revision zero protected");
+        Equal("ordinary", Encoding.UTF8.GetString((await baseline.DequeueAsync())!),
+            "protected replacement was coalesced");
+        True(await baseline.DequeueAsync() is null, "baseline queue drained");
+
+        var newSession = new OutboundQueue();
+        True(newSession.TryEnqueue("old-session-0"u8.ToArray(), OutboundClass.Snapshot(0)),
+            "old session baseline enqueue");
+        True(newSession.TryEnqueue("new-startup"u8.ToArray(), OutboundClass.Startup),
+            "new session startup enqueue");
+        True(newSession.TryEnqueue("new-session-0"u8.ToArray(), OutboundClass.Snapshot(0)),
+            "new session baseline enqueue");
+        newSession.Close();
+        Equal("new-startup", Encoding.UTF8.GetString((await newSession.DequeueAsync())!),
+            "new startup precedes baseline");
+        Equal("new-session-0", Encoding.UTF8.GetString((await newSession.DequeueAsync())!),
+            "new baseline replaces stale protected baseline");
+        True(await newSession.DequeueAsync() is null, "new session queue drained");
+    }
+
     private static async Task TestRuntimeAndAssemblyAsync()
     {
         True(!EowTransport.Send("{}").Ok, "send before initialization");
@@ -207,6 +259,23 @@ internal static class TransportTests
         Equal("silvy", startup["target"]!.GetValue<string>(), "assembly target");
         Equal(SdkId, startup["payload"]!["sdk_id"]!.GetValue<string>(), "assembly SDK ID");
         True(EowTransport.Send(startup.ToJsonString()).Ok, "send silvy accepted");
+        await NextAsync(inbound, "silvy", "fake_eow.echo");
+
+        var snapshotOwner = new JsonObject
+        {
+            ["scene"] = new JsonObject { ["room"] = "start", ["hp"] = 3 }
+        };
+        JsonObject snapshotData = snapshotOwner;
+        JsonObject snapshot = JsonNode.Parse(
+            assembly.StateSnapshot("silvy", 0, snapshotData))!.AsObject();
+        Equal("event", snapshot["envelope_kind"]!.GetValue<string>(), "state envelope kind");
+        True(snapshot["correlation_id"] is null, "state correlation ID");
+        Equal("state", snapshot["payload"]!["type"]!.GetValue<string>(), "state type");
+        Equal("snapshot", snapshot["payload"]!["kind"]!.GetValue<string>(), "state kind");
+        Equal((ulong)0, snapshot["payload"]!["revision"]!.GetValue<ulong>(), "state revision");
+        Equal(3, snapshot["payload"]!["data"]!["scene"]!["hp"]!.GetValue<int>(),
+            "state data");
+        True(EowTransport.Send(snapshot.ToJsonString()).Ok, "state snapshot accepted");
         await NextAsync(inbound, "silvy", "fake_eow.echo");
 
         string context = assembly.Context("rucia", "hello", true);

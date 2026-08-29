@@ -56,6 +56,18 @@ fn one_sdk_routes_multiple_instances_and_can_manually_reconnect() {
     let assembly = Assembly::global().unwrap();
     assert!(send(assembly.startup("silvy").unwrap()).ok);
     let silvy_echo = next_from(&bucket, "silvy", "fake_eow.echo");
+    assert!(
+        send(
+            assembly
+                .state_snapshot(
+                    "silvy",
+                    0,
+                    serde_json::Map::from_iter([("room".into(), serde_json::json!("start"))]),
+                )
+                .unwrap()
+        )
+        .ok
+    );
     assert!(send(assembly.startup("rucia").unwrap()).ok);
     let rucia_echo = next_from(&bucket, "rucia", "fake_eow.echo");
     assert_eq!(silvy_echo.target(), "eow_sdk");

@@ -104,6 +104,19 @@ impl Assembly {
         self.request(target, payload)
     }
 
+    pub fn state_snapshot(
+        &self,
+        target: &str,
+        revision: u64,
+        data: Map<String, Value>,
+    ) -> AssemblyResult {
+        let mut payload = payload_base(&self.context.sdk_id, "state");
+        payload.insert("kind".into(), Value::String("snapshot".into()));
+        payload.insert("revision".into(), Value::Number(revision.into()));
+        payload.insert("data".into(), Value::Object(data));
+        self.assemble(EnvelopeKind::Event, target, None, payload)
+    }
+
     pub fn action_register(&self, target: &str, actions: Vec<SdkAction>) -> AssemblyResult {
         self.action_list(target, "register", actions)
     }

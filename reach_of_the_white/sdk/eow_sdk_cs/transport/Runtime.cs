@@ -74,17 +74,112 @@ internal sealed class TransportRuntime
         await connection.CloseAsync().ConfigureAwait(false);
     }
 
-    internal bool TryEnqueue(string target, byte[] body)
+    internal bool TryEnqueue(string target, byte[] body, OutboundClass outboundClass)
     {
         lock (_gate)
             return _connections.TryGetValue(target, out ConnectionHandle? connection) &&
-                   connection.TryEnqueue(body);
+                   connection.TryEnqueue(body, outboundClass);
     }
 
     private static ConnectException AlreadyConnected(string instance) =>
         new(ConnectErrorKind.AlreadyConnected,
             $"EOW instance is already connected: '{instance}'")
         { Instance = instance };
+}
+
+internal enum OutboundKind { Reliable, Startup, Snapshot }
+
+internal readonly record struct OutboundClass(OutboundKind Kind, ulong Revision)
+{
+    internal static OutboundClass Reliable => new(OutboundKind.Reliable, 0);
+    internal static OutboundClass Startup => new(OutboundKind.Startup, 0);
+    internal static OutboundClass Snapshot(ulong revision) => new(OutboundKind.Snapshot, revision);
+}
+
+internal sealed class OutboundQueue
+{
+    private sealed record QueuedBody(ulong Sequence, byte[] Body);
+    private sealed record QueuedSnapshot(ulong Sequence, ulong Session, ulong Revision, byte[] Body);
+
+    private readonly object _gate = new();
+    private readonly Queue<QueuedBody> _reliable = new();
+    private readonly SemaphoreSlim _ready = new(0);
+    private QueuedSnapshot? _snapshot;
+    private ulong _nextSequence;
+    private ulong _session;
+    private bool _closed;
+
+    internal bool TryEnqueue(byte[] body, OutboundClass outboundClass)
+    {
+        bool inserted;
+        bool signal;
+        lock (_gate)
+        {
+            if (_closed)
+                return false;
+
+            bool wasEmpty = _reliable.Count == 0 && _snapshot is null;
+            ulong sequence = _nextSequence;
+            _nextSequence = checked(_nextSequence + 1);
+            if (outboundClass.Kind != OutboundKind.Snapshot)
+            {
+                if (outboundClass.Kind == OutboundKind.Startup)
+                    _session = checked(_session + 1);
+                _reliable.Enqueue(new QueuedBody(sequence, body));
+                inserted = true;
+            }
+            else if (_snapshot?.Revision == 0 &&
+                     (outboundClass.Revision != 0 || _snapshot.Session == _session))
+            {
+                inserted = false;
+            }
+            else
+            {
+                _snapshot = new QueuedSnapshot(sequence, _session, outboundClass.Revision, body);
+                inserted = true;
+            }
+            signal = inserted && wasEmpty;
+        }
+
+        if (signal)
+            _ready.Release();
+        return true;
+    }
+
+    internal async ValueTask<byte[]?> DequeueAsync()
+    {
+        while (true)
+        {
+            lock (_gate)
+            {
+                if (_reliable.Count != 0 &&
+                    (_snapshot is null || _reliable.Peek().Sequence < _snapshot.Sequence))
+                    return _reliable.Dequeue().Body;
+                if (_snapshot is not null)
+                {
+                    byte[] body = _snapshot.Body;
+                    _snapshot = null;
+                    return body;
+                }
+                if (_closed)
+                    return null;
+            }
+
+            await _ready.WaitAsync().ConfigureAwait(false);
+        }
+    }
+
+    internal void Close()
+    {
+        bool signal;
+        lock (_gate)
+        {
+            signal = !_closed;
+            _closed = true;
+        }
+        if (signal)
+            _ready.Release();
+    }
 }
 
 internal sealed class ConnectionHandle
@@ -96,7 +191,7 @@ internal sealed class ConnectionHandle
     private readonly TcpClient _client;
     private readonly FramedStream _framed;
     private readonly ChannelWriter<SdkEnvelope> _inbound;
-    private readonly Channel<byte[]> _outbound;
+    private readonly OutboundQueue _outbound;
     private readonly Task _writerTask;
     private readonly Task _readerTask;
     private bool _alive = true;
@@ -121,12 +216,7 @@ internal sealed class ConnectionHandle
         _client = client;
         _framed = framed;
         _inbound = inbound;
-        _outbound = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
-        {
-            SingleReader = true,
-            SingleWriter = false,
-            AllowSynchronousContinuations = false
-        });
+        _outbound = new OutboundQueue();
         _writerTask = Task.Run(WriterLoopAsync);
         _readerTask = Task.Run(ReaderLoopAsync);
     }
@@ -210,10 +300,10 @@ internal sealed class ConnectionHandle
         }
     }
 
-    internal bool TryEnqueue(byte[] body)
+    internal bool TryEnqueue(byte[] body, OutboundClass outboundClass)
     {
         lock (_stateGate)
-            return _alive && _outbound.Writer.TryWrite(body);
+            return _alive && _outbound.TryEnqueue(body, outboundClass);
     }
 
     internal async Task CloseAsync()
@@ -224,7 +314,7 @@ internal sealed class ConnectionHandle
             {
                 _closing = true;
                 _alive = false;
-                _outbound.Writer.TryComplete();
+                _outbound.Close();
             }
         }
 
@@ -238,7 +328,7 @@ internal sealed class ConnectionHandle
     {
         try
         {
-            await foreach (byte[] body in _outbound.Reader.ReadAllAsync().ConfigureAwait(false))
+            while (await _outbound.DequeueAsync().ConfigureAwait(false) is byte[] body)
                 await _framed.WriteFrameAsync(body).ConfigureAwait(false);
             await _framed.FlushAsync().ConfigureAwait(false);
         }
@@ -275,7 +365,7 @@ internal sealed class ConnectionHandle
         finally
         {
             MarkDead();
-            _outbound.Writer.TryComplete();
+            _outbound.Close();
         }
     }
 

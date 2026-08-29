@@ -1,16 +1,15 @@
 //! Process-wide multi-instance TCP client runtime.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::{Shutdown, SocketAddrV4, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::context::{InboundSink, context};
 use crate::endpoint::InstanceRegistry;
-use crate::envelope::SdkEnvelope;
+use crate::envelope::{EnvelopeKind, SdkEnvelope};
 use crate::error::{ConnectError, DisconnectError, EnvelopeError};
 use crate::handshake::{HandshakeRequest, HandshakeResponse};
 use crate::io::{FramedReader, FramedWriter};
@@ -43,14 +42,153 @@ enum EnqueueError {
     Unavailable,
 }
 
-enum WriterCommand {
-    Body(Vec<u8>),
-    Close,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutboundClass {
+    Reliable,
+    Startup,
+    Snapshot { revision: u64 },
+}
+
+struct QueuedBody {
+    sequence: u64,
+    body: Vec<u8>,
+}
+
+struct QueuedSnapshot {
+    sequence: u64,
+    session: u64,
+    revision: u64,
+    body: Vec<u8>,
+}
+
+#[derive(Default)]
+struct OutboundState {
+    reliable: VecDeque<QueuedBody>,
+    snapshot: Option<QueuedSnapshot>,
+    next_sequence: u64,
+    session: u64,
+    closed: bool,
+}
+
+struct OutboundQueueInner {
+    state: Mutex<OutboundState>,
+    ready: Condvar,
+}
+
+#[derive(Clone)]
+struct OutboundQueue {
+    inner: Arc<OutboundQueueInner>,
+}
+
+impl OutboundQueue {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(OutboundQueueInner {
+                state: Mutex::new(OutboundState::default()),
+                ready: Condvar::new(),
+            }),
+        }
+    }
+
+    fn enqueue(&self, body: Vec<u8>, class: OutboundClass) -> Result<(), EnqueueError> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.closed {
+            return Err(EnqueueError::Unavailable);
+        }
+
+        let sequence = state.next_sequence;
+        state.next_sequence = state
+            .next_sequence
+            .checked_add(1)
+            .expect("outbound sequence exhausted");
+        let inserted = match class {
+            OutboundClass::Reliable => {
+                state.reliable.push_back(QueuedBody { sequence, body });
+                true
+            }
+            OutboundClass::Startup => {
+                state.session = state
+                    .session
+                    .checked_add(1)
+                    .expect("state session exhausted");
+                state.reliable.push_back(QueuedBody { sequence, body });
+                true
+            }
+            OutboundClass::Snapshot { revision } => match state.snapshot.as_ref() {
+                Some(pending)
+                    if pending.revision == 0
+                        && (revision != 0 || pending.session == state.session) =>
+                {
+                    false
+                }
+                _ => {
+                    state.snapshot = Some(QueuedSnapshot {
+                        sequence,
+                        session: state.session,
+                        revision,
+                        body,
+                    });
+                    true
+                }
+            },
+        };
+        drop(state);
+        if inserted {
+            self.inner.ready.notify_one();
+        }
+        Ok(())
+    }
+
+    fn dequeue(&self) -> Option<Vec<u8>> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        loop {
+            let reliable_sequence = state.reliable.front().map(|queued| queued.sequence);
+            let snapshot_sequence = state.snapshot.as_ref().map(|queued| queued.sequence);
+            match (reliable_sequence, snapshot_sequence) {
+                (Some(reliable), Some(snapshot)) if reliable < snapshot => {
+                    return state.reliable.pop_front().map(|queued| queued.body);
+                }
+                (Some(_), Some(_)) | (None, Some(_)) => {
+                    return state.snapshot.take().map(|queued| queued.body);
+                }
+                (Some(_), None) => {
+                    return state.reliable.pop_front().map(|queued| queued.body);
+                }
+                (None, None) if state.closed => return None,
+                (None, None) => {
+                    state = self
+                        .inner
+                        .ready
+                        .wait(state)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                }
+            }
+        }
+    }
+
+    fn close(&self) {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.closed = true;
+        drop(state);
+        self.inner.ready.notify_one();
+    }
 }
 
 struct ConnectionHandle {
     instance: String,
-    sender: Sender<WriterCommand>,
+    outbound: OutboundQueue,
 
     alive: Arc<AtomicBool>,
     control: TcpStream,
@@ -59,20 +197,16 @@ struct ConnectionHandle {
 }
 
 impl ConnectionHandle {
-    fn enqueue(&self, body: Vec<u8>) -> Result<(), EnqueueError> {
+    fn enqueue(&self, body: Vec<u8>, class: OutboundClass) -> Result<(), EnqueueError> {
         if !self.alive.load(Ordering::Acquire) {
             return Err(EnqueueError::Unavailable);
         }
-
-        if self.sender.send(WriterCommand::Body(body)).is_err() {
-            return Err(EnqueueError::Unavailable);
-        }
-        Ok(())
+        self.outbound.enqueue(body, class)
     }
 
     fn close(mut self) -> Result<(), DisconnectError> {
         self.alive.store(false, Ordering::Release);
-        let _ = self.sender.send(WriterCommand::Close);
+        self.outbound.close();
 
         let writer_panicked = self
             .writer
@@ -164,7 +298,12 @@ impl TransportRuntime {
         connection.close()
     }
 
-    fn enqueue(&self, target: &str, body: Vec<u8>) -> Result<(), EnqueueError> {
+    fn enqueue(
+        &self,
+        target: &str,
+        body: Vec<u8>,
+        class: OutboundClass,
+    ) -> Result<(), EnqueueError> {
         let connections = self
             .connections
             .lock()
@@ -172,7 +311,7 @@ impl TransportRuntime {
         connections
             .get(target)
             .ok_or(EnqueueError::Unavailable)?
-            .enqueue(body)
+            .enqueue(body, class)
     }
 }
 
@@ -254,9 +393,10 @@ pub fn send(sdk_envelope_json: String) -> SendResult {
     }
 
     let target = envelope.target().to_owned();
+    let class = outbound_class(&envelope);
     match context
         .runtime
-        .enqueue(&target, sdk_envelope_json.into_bytes())
+        .enqueue(&target, sdk_envelope_json.into_bytes(), class)
     {
         Ok(()) => SendResult::accepted(),
 
@@ -329,29 +469,23 @@ fn establish_connection(
 
     let write_stream = stream.try_clone().map_err(ConnectError::Io)?;
     let control = stream;
-    let (writer_tx, writer_rx) = mpsc::channel();
+    let outbound = OutboundQueue::new();
 
     let alive = Arc::new(AtomicBool::new(true));
 
     let writer_alive = Arc::clone(&alive);
+    let writer_outbound = outbound.clone();
     let writer_instance = instance.to_owned();
     let writer = thread::Builder::new()
         .name(format!("eow-sdk-writer-{writer_instance}"))
         .spawn(move || {
             let mut framed = FramedWriter::new(write_stream);
-            while let Ok(command) = writer_rx.recv() {
-                match command {
-                    WriterCommand::Body(body) => {
-                        if framed.write_frame(&body).is_err() {
-                            break;
-                        }
-                    }
-                    WriterCommand::Close => {
-                        let _ = framed.flush();
-                        break;
-                    }
+            while let Some(body) = writer_outbound.dequeue() {
+                if framed.write_frame(&body).is_err() {
+                    break;
                 }
             }
+            let _ = framed.flush();
             writer_alive.store(false, Ordering::Release);
             let stream = framed.into_inner();
             let _ = stream.shutdown(Shutdown::Both);
@@ -360,7 +494,7 @@ fn establish_connection(
 
     let reader_alive = Arc::clone(&alive);
 
-    let reader_sender = writer_tx.clone();
+    let reader_outbound = outbound.clone();
     let reader_sdk_id = sdk_id.to_owned();
     let reader_instance = instance.to_owned();
     let reader = match thread::Builder::new()
@@ -384,11 +518,11 @@ fn establish_connection(
                 }
             }
             reader_alive.store(false, Ordering::Release);
-            let _ = reader_sender.send(WriterCommand::Close);
+            reader_outbound.close();
         }) {
         Ok(reader) => reader,
         Err(error) => {
-            let _ = writer_tx.send(WriterCommand::Close);
+            outbound.close();
             let _ = writer.join();
             return Err(ConnectError::Spawn(error));
         }
@@ -396,7 +530,7 @@ fn establish_connection(
 
     Ok(ConnectionHandle {
         instance: instance.to_owned(),
-        sender: writer_tx,
+        outbound,
 
         alive,
         control,
@@ -429,6 +563,107 @@ fn handshake_framed_error(error: crate::error::FramedIoError) -> ConnectError {
     match error {
         crate::error::FramedIoError::Io(error) => handshake_io_error(error),
         other => ConnectError::Framed(other),
+    }
+}
+
+fn outbound_class(envelope: &SdkEnvelope) -> OutboundClass {
+    let payload = envelope.payload();
+    if envelope.envelope_kind() == EnvelopeKind::Request
+        && payload.get("type").and_then(serde_json::Value::as_str) == Some("startup")
+    {
+        OutboundClass::Startup
+    } else if envelope.envelope_kind() == EnvelopeKind::Event
+        && payload.get("type").and_then(serde_json::Value::as_str) == Some("state")
+        && payload.get("kind").and_then(serde_json::Value::as_str) == Some("snapshot")
+        && let Some(revision) = payload.get("revision").and_then(serde_json::Value::as_u64)
+    {
+        OutboundClass::Snapshot { revision }
+    } else {
+        OutboundClass::Reliable
+    }
+}
+
+#[cfg(test)]
+mod outbound_queue_tests {
+    use super::{OutboundClass, OutboundQueue};
+
+    #[test]
+    fn later_snapshots_replace_the_pending_snapshot_as_a_whole() {
+        let queue = OutboundQueue::new();
+        queue
+            .enqueue(b"ordinary-before".to_vec(), OutboundClass::Reliable)
+            .unwrap();
+        queue
+            .enqueue(
+                b"snapshot-1".to_vec(),
+                OutboundClass::Snapshot { revision: 1 },
+            )
+            .unwrap();
+        queue
+            .enqueue(b"ordinary-between".to_vec(), OutboundClass::Reliable)
+            .unwrap();
+        queue
+            .enqueue(
+                b"snapshot-2".to_vec(),
+                OutboundClass::Snapshot { revision: 2 },
+            )
+            .unwrap();
+        queue.close();
+
+        assert_eq!(queue.dequeue().unwrap(), b"ordinary-before");
+        assert_eq!(queue.dequeue().unwrap(), b"ordinary-between");
+        assert_eq!(queue.dequeue().unwrap(), b"snapshot-2");
+        assert!(queue.dequeue().is_none());
+    }
+
+    #[test]
+    fn revision_zero_cannot_be_replaced_while_pending() {
+        let queue = OutboundQueue::new();
+        queue
+            .enqueue(
+                b"snapshot-0".to_vec(),
+                OutboundClass::Snapshot { revision: 0 },
+            )
+            .unwrap();
+        queue
+            .enqueue(
+                b"snapshot-1".to_vec(),
+                OutboundClass::Snapshot { revision: 1 },
+            )
+            .unwrap();
+        queue
+            .enqueue(b"ordinary".to_vec(), OutboundClass::Reliable)
+            .unwrap();
+        queue.close();
+
+        assert_eq!(queue.dequeue().unwrap(), b"snapshot-0");
+        assert_eq!(queue.dequeue().unwrap(), b"ordinary");
+        assert!(queue.dequeue().is_none());
+    }
+
+    #[test]
+    fn revision_zero_replaces_a_pending_snapshot_from_an_older_session() {
+        let queue = OutboundQueue::new();
+        queue
+            .enqueue(
+                b"old-session-0".to_vec(),
+                OutboundClass::Snapshot { revision: 0 },
+            )
+            .unwrap();
+        queue
+            .enqueue(b"new-startup".to_vec(), OutboundClass::Startup)
+            .unwrap();
+        queue
+            .enqueue(
+                b"new-session-0".to_vec(),
+                OutboundClass::Snapshot { revision: 0 },
+            )
+            .unwrap();
+        queue.close();
+
+        assert_eq!(queue.dequeue().unwrap(), b"new-startup");
+        assert_eq!(queue.dequeue().unwrap(), b"new-session-0");
+        assert!(queue.dequeue().is_none());
     }
 }
 
@@ -626,11 +861,11 @@ mod tests {
         let control = TcpStream::connect(address).unwrap();
         let peer_stream = peer.join().unwrap();
 
-        let (sender, receiver) = mpsc::channel();
-        drop(receiver);
+        let outbound = OutboundQueue::new();
+        outbound.close();
         let connection = ConnectionHandle {
             instance: "silvy".to_owned(),
-            sender,
+            outbound,
             alive: Arc::new(AtomicBool::new(true)),
             control,
             writer: None,
@@ -645,7 +880,7 @@ mod tests {
             "Cyberpunk",
         );
         assert!(matches!(
-            connection.enqueue(request.to_json_vec()),
+            connection.enqueue(request.to_json_vec(), OutboundClass::Reliable),
             Err(EnqueueError::Unavailable)
         ));
         drop(peer_stream);

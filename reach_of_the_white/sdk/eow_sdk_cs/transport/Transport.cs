@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json.Nodes;
 using System.Threading.Channels;
 
 namespace EowSdk.Transport;
@@ -132,9 +133,25 @@ public static class Transport
         if (violations.Count != 0)
             return SendResult.Rejected(violations);
 
-        return context.Runtime.TryEnqueue(envelope.Target, body)
+        OutboundClass outboundClass = ClassifyOutbound(envelope);
+        return context.Runtime.TryEnqueue(envelope.Target, body, outboundClass)
             ? SendResult.Accepted()
             : SendResult.Rejected(Array.Empty<string>());
+    }
+
+    private static OutboundClass ClassifyOutbound(SdkEnvelope envelope)
+    {
+        JsonObject payload = envelope.Payload;
+        if (envelope.Kind == EnvelopeKind.Request &&
+            payload["type"]?.GetValue<string>() == "startup")
+            return OutboundClass.Startup;
+        if (envelope.Kind == EnvelopeKind.Event &&
+            payload["type"]?.GetValue<string>() == "state" &&
+            payload["kind"]?.GetValue<string>() == "snapshot" &&
+            payload["revision"] is JsonValue revisionValue &&
+            revisionValue.TryGetValue(out ulong revision))
+            return OutboundClass.Snapshot(revision);
+        return OutboundClass.Reliable;
     }
 
     internal static TransportContext? GetContext() => Volatile.Read(ref _context);

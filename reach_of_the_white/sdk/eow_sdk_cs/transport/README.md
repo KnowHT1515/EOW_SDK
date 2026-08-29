@@ -29,6 +29,7 @@ dotnet run --project ..\transport_tests\EowSdk.Transport.Tests.csproj -f net10.0
 ## Quick start
 
 ```csharp
+using System.Text.Json.Nodes;
 using EowSdk.Transport;
 using EowTransport = EowSdk.Transport.Transport;
 
@@ -37,17 +38,22 @@ await EowTransport.ConnectAsync("silvy");
 
 Assembly assembly = Assembly.Global();
 SendResult accepted = EowTransport.Send(assembly.Startup("silvy"));
+SdkEnvelope startupAck = await inbound.ReadAsync();
+accepted = EowTransport.Send(assembly.StateSnapshot("silvy", 0,
+    new JsonObject { ["room"] = "start", ["hp"] = 3 }));
 
 SdkEnvelope message = await inbound.ReadAsync();
 await EowTransport.DisconnectAsync("silvy");
 ```
 
-`SendResult.Ok` means that the validated Envelope entered the target writer queue. It does not guarantee delivery to the peer.
+`SendResult.Ok` means that the validated Envelope was accepted by the target's outbound policy. It does not guarantee delivery to the peer. Ordinary Envelopes use the reliable FIFO; `state.snapshot` uses a separate one-element latest-only slot, and an accepted nonzero snapshot may be superseded before transmission. Revision zero is protected as the startup-session baseline.
+
+`Assembly.StateSnapshot` accepts a caller-managed `ulong` revision. Start from zero after the target's startup succeeds and advance it for each complete snapshot produced; gaps observed by the receiver are valid after queue coalescing.
 
 ## Public components
 
 - `Transport`: one-time initialization, connect/disconnect, per-instance routing, send acceptance.
-- `Assembly`: startup, shutdown, context, action register/unregister/update/clear/demand/result Envelopes.
+- `Assembly`: startup, shutdown, context, state snapshot, and action register/unregister/update/clear/demand/result Envelopes.
 - `SdkEnvelope`: strict static and contextual validation with unknown-field preservation.
 - `InstanceRegistry`: bundled or custom instance/port registry validation.
 - `FrameCodec`, `Deframer`, `FramedStream`: `u32` big-endian framing and `\\eow/` integrity sentinel.

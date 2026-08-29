@@ -68,6 +68,16 @@ public sealed class Assembly
         return Request(target, payload);
     }
 
+    public string StateSnapshot(string target, ulong revision, JsonObject data)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        JsonObject payload = PayloadBase("state");
+        payload["kind"] = "snapshot";
+        payload["revision"] = revision;
+        payload["data"] = JsonNodeClone.Create(data);
+        return Assemble(EnvelopeKind.Event, target, null, payload);
+    }
+
     public string ActionRegister(string target, IEnumerable<SdkAction> actions) =>
         ActionList(target, "register", actions);
 

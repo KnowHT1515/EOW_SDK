@@ -517,6 +517,26 @@ mod tests {
     }
 
     #[test]
+    fn state_snapshot_remains_neuro_sdk_incompatible() {
+        let body = envelope(
+            "event",
+            Value::Null,
+            json!({
+                "sdk_id": "game",
+                "type": "state",
+                "kind": "snapshot",
+                "revision": 0,
+                "data": {"room": "start"},
+            }),
+        );
+        let envelope = SdkEnvelope::parse(&body, "game").unwrap();
+        assert!(matches!(
+            parse_business(&envelope),
+            Err(ProtocolError::Invalid("payload.type"))
+        ));
+    }
+
+    #[test]
     fn generated_ack_uses_numeric_ids_and_request_correlation() {
         let ack: Value = serde_json::from_slice(&ack("game", "712345678901", true)).unwrap();
         assert!(is_event_id(ack["event_id"].as_str().unwrap()));

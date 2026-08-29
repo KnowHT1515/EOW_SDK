@@ -23,7 +23,7 @@
 
 `<instance>` must be present in `transport/instance.json`.
 
-`<type>` includes `[startup, shutdown, context, action]`
+`<type>` includes `[startup, shutdown, context, state, action]`
 
 ---
 
@@ -82,6 +82,33 @@ Requests the addition of contextual information.
 ```
 
 Provides additional contextual information to `EOW`. `silent: true` means that `EOW` will remain silent, while `silent: false` means that `EOW` may respond.
+
+---
+
+### state.snapshot
+
+Publishes one complete game-state snapshot. This message is not compatible with `Neuro-SDK`.
+
+```json
+{
+    "envelope_kind": "event",
+    "payload": {
+        "sdk_id": "<sdk_id>",
+        "type": "state",
+        "kind": "snapshot",
+        "revision": <int>,
+        "data": {
+            ...
+        }
+    }
+}
+```
+
+`data` is an application-defined JSON object. Its fields do not need to be registered with the SDK. Every snapshot is complete and atomically replaces the receiver's previous game state; partial updates, patches, deltas, and field-level merging are not defined.
+
+Each successful `startup` begins a new state session for that `target`. The first snapshot in the session uses `revision: 0`, and later snapshots use strictly increasing revisions. Revision gaps are valid because pending nonzero snapshots may be superseded before transmission. `shutdown`, disconnection, connection failure, and SDK process termination end the session; the next session starts from revision zero again. Different targets maintain independent sessions.
+
+`Assembly` is stateless and does not generate revisions. The caller supplies and advances the revision after the corresponding startup has succeeded.
 
 ---
 
