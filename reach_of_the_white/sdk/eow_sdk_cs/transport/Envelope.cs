@@ -73,11 +73,11 @@ public sealed class SdkEnvelope
     public string EventId => _object["event_id"]!.GetValue<string>();
     public string? CorrelationId => _object["correlation_id"]?.GetValue<string>();
     private JsonObject PayloadObject => (JsonObject)_object["payload"]!;
-    public JsonObject Payload => (JsonObject)PayloadObject.DeepClone();
+    public JsonObject Payload => JsonNodeClone.Create(PayloadObject);
     public string? PayloadSdkId => PayloadObject["sdk_id"] is JsonValue value && value.TryGetValue(out string? id) ? id : null;
 
     /// <summary>Returns a deep copy, preventing callers from invalidating this envelope.</summary>
-    public JsonObject ToJsonObject() => (JsonObject)_object.DeepClone();
+    public JsonObject ToJsonObject() => JsonNodeClone.Create(_object);
 
     public byte[] ToUtf8Bytes() => JsonSerializer.SerializeToUtf8Bytes(_object);
     public string ToJson() => _object.ToJsonString();
@@ -115,7 +115,7 @@ public sealed class SdkEnvelope
         if (node is not JsonObject jsonObject)
             throw Invalid(Enum.GetValues<EnvelopeViolation>());
 
-        JsonObject owned = (JsonObject)jsonObject.DeepClone();
+        JsonObject owned = JsonNodeClone.Create(jsonObject);
         List<EnvelopeViolation> violations = ValidateObject(owned, registry);
         if (violations.Count != 0)
             throw Invalid(violations);
@@ -140,8 +140,8 @@ public sealed class SdkEnvelope
             ["target"] = target,
             ["event_id"] = eventId.Value,
             ["correlation_id"] = correlationId?.Value,
-            ["ts_utc"] = timestampUtc?.DeepClone(),
-            ["payload"] = payload.DeepClone()
+            ["ts_utc"] = timestampUtc is null ? null : JsonNodeClone.Create(timestampUtc),
+            ["payload"] = JsonNodeClone.Create(payload)
         };
         return FromJsonNode(value, registry ?? InstanceRegistry.Bundled());
     }

@@ -17,7 +17,7 @@ public sealed record SdkAction(
             ["description"] = Description
         };
         if (Arguments is not null)
-            value["arguments"] = Arguments.DeepClone();
+            value["arguments"] = JsonNodeClone.Create(Arguments);
         if (Required is { Count: > 0 })
             value["required"] = new JsonArray(Required.Select(item => JsonValue.Create(item)).ToArray());
         return value;

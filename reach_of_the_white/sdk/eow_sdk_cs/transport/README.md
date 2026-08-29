@@ -1,6 +1,30 @@
 # EowSdk.Transport
 
-`EowSdk.Transport` is the .NET 8 port of the Rust `eow-sdk-transport` crate. It keeps the same wire protocol and validation rules while exposing asynchronous TCP lifecycle methods appropriate for C#.
+`EowSdk.Transport` is the multi-targeted .NET port of the Rust `eow-sdk-transport` crate. It keeps the same wire protocol and validation rules while exposing asynchronous TCP lifecycle methods appropriate for C#.
+
+## Supported frameworks
+
+| Target framework | Support level |
+| --- | --- |
+| .NET 6 (`net6.0`) | Legacy compatibility; the runtime is no longer supported by Microsoft |
+| .NET 8 (`net8.0`) | Supported |
+| .NET 10 (`net10.0`) | Supported |
+
+Use the .NET 10 SDK to build all target frameworks in one command:
+
+```powershell
+dotnet build EowSdk.Transport.csproj
+```
+
+The three builds expose the same public API and wire behavior. Consumers should reference the target selected by their project or NuGet tooling.
+
+Run the transport test suite once per target framework. The matching runtime must be installed for each command:
+
+```powershell
+dotnet run --project ..\transport_tests\EowSdk.Transport.Tests.csproj -f net6.0
+dotnet run --project ..\transport_tests\EowSdk.Transport.Tests.csproj -f net8.0
+dotnet run --project ..\transport_tests\EowSdk.Transport.Tests.csproj -f net10.0
+```
 
 ## Quick start
 

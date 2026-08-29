@@ -78,7 +78,8 @@ internal static class TransportTests
         var reader = new FramedStream(stream, 1);
         byte[] firstBody = (await reader.ReadFrameAsync())!;
         True("one"u8.SequenceEqual(firstBody), "framed stream first");
-        True(Encoding.UTF8.GetBytes("二").SequenceEqual((await reader.ReadFrameAsync())!),
+        byte[] secondBody = (await reader.ReadFrameAsync())!;
+        True(Encoding.UTF8.GetBytes("二").SequenceEqual(secondBody),
             "framed stream unicode");
         True(await reader.ReadFrameAsync() is null, "framed stream EOF");
 
@@ -135,11 +136,23 @@ internal static class TransportTests
     {
         JsonObject valid = ValidEnvelope();
         valid["extension"] = new JsonObject { ["future"] = true };
+        valid["payload"]!["nested"] = new JsonObject { ["value"] = 7 };
         SdkEnvelope envelope = SdkEnvelope.FromJsonNode(valid);
         Equal(EnvelopeKind.Request, envelope.Kind, "envelope kind");
         True(envelope.ToJsonObject()["extension"]!["future"]!.GetValue<bool>(),
             "unknown field preserved");
         True(!envelope.ToJsonObject().ContainsKey("ts_utc"), "timestamp remains optional");
+
+        JsonObject detachedPayload = envelope.Payload;
+        detachedPayload["sdk_id"] = "mutated";
+        detachedPayload["nested"]!["value"] = 42;
+        Equal(SdkId, envelope.PayloadSdkId, "payload clone protects SDK ID");
+        Equal(7, envelope.Payload["nested"]!["value"]!.GetValue<int>(),
+            "payload clone protects nested content");
+
+        JsonObject detachedEnvelope = envelope.ToJsonObject();
+        detachedEnvelope["target"] = "rucia";
+        Equal("silvy", envelope.Target, "envelope clone protects routing fields");
 
         JsonObject response = ValidEnvelope();
         response["envelope_kind"] = "response";
@@ -165,6 +178,21 @@ internal static class TransportTests
         await using var rucia = new FakePeer("rucia", SdkId);
         ChannelReader<SdkEnvelope> inbound = EowTransport.Initialize(SdkId);
         Assembly assembly = Assembly.Global();
+
+        var argumentOwner = new JsonObject
+        {
+            ["arguments"] = new JsonObject
+            {
+                ["door"] = new JsonObject { ["type"] = "integer" }
+            }
+        };
+        var parentedArguments = (JsonObject)argumentOwner["arguments"]!;
+        string registeredAction = assembly.ActionRegister("silvy",
+        [
+            new SdkAction("open_door", "Open the selected door", parentedArguments, ["door"])
+        ]);
+        Equal("integer", JsonNode.Parse(registeredAction)!["payload"]!["data"]![0]!["arguments"]!["door"]!["type"]!.GetValue<string>(),
+            "action arguments are cloned from their existing owner");
 
         await EowTransport.ConnectAtAsync("silvy", silvy.EndPoint);
         await NextAsync(inbound, "silvy", "fake_eow.ready");
@@ -205,20 +233,26 @@ internal static class TransportTests
 
     private static async Task TestAbsoluteHandshakeTimeoutAsync()
     {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         Task peer = Task.Run(async () =>
         {
             using TcpClient client = await listener.AcceptTcpClientAsync();
             await Task.Delay(300);
         });
-        var endpoint = (IPEndPoint)listener.LocalEndpoint;
-        await ThrowsAsync<ConnectException>(
-            () => EowTransport.ConnectAtAsync("silvy", endpoint, TimeSpan.FromMilliseconds(60)),
-            error => error.Kind == ConnectErrorKind.HandshakeTimeout,
-            "absolute handshake timeout");
-        listener.Stop();
-        await peer;
+        try
+        {
+            var endpoint = (IPEndPoint)listener.LocalEndpoint;
+            await ThrowsAsync<ConnectException>(
+                () => EowTransport.ConnectAtAsync("silvy", endpoint, TimeSpan.FromMilliseconds(60)),
+                error => error.Kind == ConnectErrorKind.HandshakeTimeout,
+                "absolute handshake timeout");
+        }
+        finally
+        {
+            listener.Stop();
+            await peer;
+        }
     }
 
     private static async Task<SdkEnvelope> NextAsync(
