@@ -1,0 +1,11 @@
+**/.history/
+**/.vs/
+
+**/dist/
+**/build/
+**/target/
+**/bin/
+**/obj/
+
+**/temp/
+**/tmp/
