@@ -56,7 +56,7 @@
 
 ## SDK_Envelope
 
-`EOW_SDK` 采用以下形式作为标准通信格式
+`EOW_SDK` 使用 `UTF-8` 编码的 `JSON` 格式，结构规范如下：
 
 ```json
 {
