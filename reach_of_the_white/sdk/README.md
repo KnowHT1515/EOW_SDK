@@ -100,7 +100,7 @@ Requests unregistration of an `EOW_SDK` instance.
 
 ---
 
-### context
+#### context
 
 Requests the addition of contextual information.
 
@@ -310,7 +310,7 @@ If `permanent_context: true`, the current request will be added to the persisten
             "state": "<state_instruction>",     // Optional
             "goal": "<goal_description>",
             "permanent_context": <bool>,
-            "priority": "low" | "medium" | "high" | "critical",
+            "respond_asap": <bool>,
             "actions": [
                 "<action_id>",
                 "<action_id>",

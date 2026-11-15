@@ -61,9 +61,11 @@ public sealed class EowSdk {
         }
     }
 
-    public async Task<Envelope> Context(string content, bool silent) {
+    public Task<Envelope> Context(string content, bool silent) => Context(new ContextData(content, silent));
+
+    public async Task<Envelope> Context(ContextData data) {
         var connection = _transport.Connection;
-        var envelope = _transport.EnvelopeBuild(EnvelopeType.Context, new ContextData(content, silent));
+        var envelope = _transport.EnvelopeBuild(EnvelopeType.Context, data);
         using var pending = connection.ExpectResponse(envelope);
         await connection.EnvelopeSend(envelope).ConfigureAwait(false);
         var (response, _) = await pending.Wait().ConfigureAwait(false);
@@ -118,9 +120,7 @@ public sealed class EowSdk {
     public async Task<(Envelope Ack, Envelope? Action)> ActionDemand(DemandData data) {
         var connection = _transport.Connection;
         var envelope = _transport.EnvelopeBuild(EnvelopeType.ActionDemand, data);
-        var demandId = envelope.Payload.GetDataString("id")
-            ?? throw new ArgumentException("DemandData must provide a string 'id' in its JSON data.", nameof(data));
-        using var pending = connection.ExpectResponse(envelope, demandId);
+        using var pending = connection.ExpectResponse(envelope, data.Id);
         await connection.EnvelopeSend(envelope).ConfigureAwait(false);
         return await pending.Wait().ConfigureAwait(false);
     }
