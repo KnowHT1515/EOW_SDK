@@ -37,7 +37,7 @@ await sdk.Startup();
     "event_id": "<12digit_string>",
     "correlation_id": null | "<12digit_string>",
     "ts_utc": "<iso8601_utc>",
-    "payload": { 
+    "payload": {
         "sdk_id": "<sdk_id>",
         "type": "<type>",
         ...
@@ -397,9 +397,9 @@ An `action` execution request initiated by `EOW` instance. The `EOW_SDK` instanc
         "sdk_id": "<sdk_id>",
         "type": "action",
         "data": {
-            "demand_id": "<demand_id>",   // Optional.
+            "demand_id": "<demand_id>",   // Optional
             "action_id": "<action_id>",
-            "arguments": {      // Optional
+            "arguments": {                // Optional
                 "<argument_id>": "<argument>",
                 "<argument_id>": <int>,
                 "<argumnet_id>": <bool>,

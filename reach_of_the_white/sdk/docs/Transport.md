@@ -52,11 +52,13 @@
 }
 ```
 
-之后双方使用 `SDK_Envelope` 进行通信，或中断 `TCP` 连接
+若返回 `result:deny`，将断开 `TCP` 连接
+
+之后双方使用 `SDK_Envelope` 进行通信
 
 ## SDK_Envelope
 
-`EOW_SDK` 使用 `UTF-8` 编码的 `JSON` 格式，结构规范如下：
+`SDK_Envelope` 使用 `UTF-8` 编码的 `JSON`，结构规范如下：
 
 ```json
 {
