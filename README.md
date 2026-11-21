@@ -23,7 +23,7 @@ A C# implementation is currently available, targeting **.NET 6 and .NET 8**.
 | `ActionDemand()` | Request a selection from the specified actions |
 | `ActionResult()` | Report an action's execution result |
 
-Each method builds and sends its Envelope internally. Action requests are delivered to the host through the `ActionReceived` event; the SDK does not execute actions itself.
+Each method builds and sends its envelope internally. `ActionDemand()` returns `(Ack, Action)`, with the matching action on success and `Action` set to `null` if the server rejects the demand. Other action requests arrive through the `ActionReceived` event. Wait for the current demand to finish or time out before sending another.
 
 See the [API and protocol reference](reach_of_the_white/sdk/README.md) for data types, fields, and message formats.
 
@@ -68,7 +68,7 @@ EowSdk sdk = new(sdkId: "sdk_demo", port: 7707);
 Envelope startup = await sdk.Startup();
 Console.WriteLine(JsonSerializer.Serialize(startup));
 
-if (!startup.Payload.Data!.Value.GetProperty("ok").GetBoolean()) {
+if (startup.Payload.Type == "ack" && !startup.Payload.Data!.Value.GetProperty("ok").GetBoolean()) {
     return;
 }
 
@@ -95,7 +95,7 @@ The constructor accepts the following parameters:
 - `port`: The server's SDK connection port, supplied by the host.
 - `timeout`: An optional communication timeout, defaulting to 30 seconds.
 
-The example uses `7707`, the port configured for EOW_Lite's Adapter. Use the port specified by your server configuration.
+The SDK connects to `127.0.0.1` using the supplied port. The example uses `7707`, the port configured for EOW_Lite's Adapter.
 
 Start a server that supports the SDK protocol, then run the sample:
 
@@ -103,15 +103,15 @@ Start a server that supports the SDK protocol, then run the sample:
 dotnet run --project .\temp\EowSdkDemo\EowSdkDemo.csproj
 ```
 
-The `ack` returned by `Startup()` and `Context()` reports the request's processing status. The sample prints these protocol responses; conversation text is displayed by the server's interface.
+The sample prints the responses to `Startup()` and `Context()`. For an `ack` response, `payload.data.ok` indicates whether the request succeeded.
 
 ## Quick Testing with EOW_Lite
 
-[EOW_Lite](https://github.com/KnowHT1515/EOW_Lite) is a lightweight companion runtime for SDK development.
+[EOW_Lite](https://github.com/KnowHT1515/EOW_Lite) is a lightweight EOW runtime which can be used for SDK development and testing.
 
 > **Current integration status**
 >
-> EOW_Lite's Adapter currently implements process startup and shutdown only; SDK connections and protocol translation are not yet implemented. You can currently verify Lite's runtime and conversations and build the SDK. Full SDK-to-Lite integration testing requires the Adapter implementation.
+> EOW_Lite's Adapter currently handles process startup and shutdown only; SDK connections and protocol translation are not yet implemented. Full SDK-to-Lite integration testing requires the Adapter implementation.
 
 ### 1. Prepare EOW_Lite
 
@@ -144,8 +144,6 @@ From the EOW_Lite repository root, run:
 .\eow-lite.cmd link
 ```
 
-After startup, Supervisor displays the modules' online status and the UI opens a terminal window. Enter a message in the UI and verify that the model replies.
-
 To stop Lite, open another terminal in the same repository and run:
 
 ```powershell
@@ -161,17 +159,14 @@ eow-lite unlink
 
 ### 3. Connect the SDK: Pending Adapter Implementation
 
-EOW_Lite currently configures the Adapter port as `7707`. Once the Adapter supports SDK connections, keep Lite running and launch the sample host from the EOW_SDK repository:
+Keep Lite running and launch the sample host from the EOW_SDK repository:
 
 ```powershell
 dotnet run --project .\temp\EowSdkDemo\EowSdkDemo.csproj
 ```
 
-The expected integration flow will be:
+Check the following results:
 
-1. The SDK completes the TCP handshake, and `Startup()` returns an `ack` with `ok` set to `true`.
-2. The sample submits its test context, and `Context()` returns an acknowledgment.
-3. The context and subsequent model output appear in the Lite UI.
-4. Pressing Enter in the sample host calls `Shutdown()` to unregister and disconnect.
-
-The Adapter does not currently listen on the SDK connection port, so this connection step will fail. Further examples covering action registration, action requests, and execution results will be added once the Adapter is implemented.
+1. The SDK completes the TCP handshake, and `Startup()` returns an `ack` with `payload.data.ok` set to `true`.
+2. `Context()` submits the test context and returns an `ack` with `payload.data.ok` set to `true`.
+3. Pressing Enter in the sample host calls `Shutdown()` to unregister and disconnect.
