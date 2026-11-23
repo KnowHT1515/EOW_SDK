@@ -166,14 +166,13 @@ public sealed class SdkAction {
 public sealed class Argument {
     private Argument(
         string type,
+        string description,
         IReadOnlyList<string>? @enum = null,
         int? minimum = null,
         int? maximum = null
     ) {
         Type = type ?? throw new ArgumentNullException(nameof(type));
-        if (@enum is not null) {
-            DataValidation.ValidateList(@enum, nameof(@enum));
-        }
+        Description = description ?? throw new ArgumentNullException(nameof(description));
 
         if (minimum is int min && maximum is int max && min > max) {
             throw new ArgumentException($"Maximum ({max}) must be greater than or equal to minimum ({min}).", nameof(maximum));
@@ -196,16 +195,18 @@ public sealed class Argument {
     [JsonPropertyName("maximum"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Maximum { get; }
 
-    public static Argument String(IReadOnlyList<string>? @enum = null) => new("string", @enum: @enum);
+    [JsonPropertyName("description")]
+    public string Description { get; }
 
-    public static Argument Integer(int? minimum = null, int? maximum = null) =>
-        new("integer", minimum: minimum, maximum: maximum);
+    public static Argument String(string description, IReadOnlyList<string> @enum) => new("string", description, @enum: DataValidation.ValidateList(@enum, nameof(@enum)));
 
-    public static Argument Boolean() => new("boolean");
+    public static Argument Integer(string description, int? minimum = null, int? maximum = null) => new("integer", description, minimum: minimum, maximum: maximum);
+
+    public static Argument Boolean(string description) => new("boolean", description);
 }
 
 static class DataValidation {
-    internal static void ValidateList<T>(IReadOnlyList<T> items, string parameterName) where T : class {
+    internal static IReadOnlyList<T> ValidateList<T>(IReadOnlyList<T> items, string parameterName) where T : class {
         ArgumentNullException.ThrowIfNull(items, parameterName);
 
         for (var index = 0; index < items.Count; index++) {
@@ -213,5 +214,7 @@ static class DataValidation {
                 throw new ArgumentException($"Item at index {index} must not be null.", parameterName);
             }
         }
+
+        return items;
     }
 }

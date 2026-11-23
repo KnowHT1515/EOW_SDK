@@ -173,15 +173,18 @@ Requests registration of `action`(s).
                             "<argument>",
                             "<argument>",
                             ...
-                        ]
+                        ],
+                        "description": "<argument_description>"
                     },
                     "<argument_id>": {
                         "type": "integer",
                         "minimum": <int>,
                         "maximum": <int>,
+                        "description": "<argument_description>"
                     },
                     "<argument_id>": {
-                        "type": "boolean"
+                        "type": "boolean",
+                        "description": "<argument_description>"
                     },
                     ...
                 },
@@ -249,15 +252,18 @@ Fully replaces the list of available `action`s.
                             "<argument>",
                             "<argument>",
                             ...
-                        ]
+                        ],
+                        "description": "<argument_description>"
                     },
                     "<argument_id>": {
                         "type": "integer",
                         "minimum": <int>,
                         "maximum": <int>,
+                        "description": "<argument_description>"
                     },
                     "<argument_id>": {
-                        "type": "boolean"
+                        "type": "boolean",
+                        "description": "<argument_description>"
                     },
                     ...
                 },
