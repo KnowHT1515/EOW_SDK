@@ -97,10 +97,14 @@ public sealed class DemandData : EnvelopeData {
 }
 
 public sealed class ResultData : EnvelopeData {
-    public ResultData(bool ok, string? result = null) {
+    public ResultData(string actionId, bool ok, string? result = null) {
+        ActionId = actionId ?? throw new ArgumentNullException(nameof(actionId));
         Ok = ok;
         Result = result;
     }
+
+    [JsonPropertyName("action")]
+    public string ActionId { get; }
 
     [JsonPropertyName("ok")]
     public bool Ok { get; }

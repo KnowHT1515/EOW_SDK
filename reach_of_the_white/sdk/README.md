@@ -337,6 +337,7 @@ Returns information about the execution of an `action` and its result.
         "type": "action",
         "kind": "result",
         "data": {
+            "action": "<action_id>",
             "ok": <bool>,
             "result": "<result_message>"    // Optional
         }
