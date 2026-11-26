@@ -51,6 +51,7 @@ pub struct SdkAction {
 impl SdkAction {
 
     pub fn new(action_id: impl Into<String>, description: impl Into<String>, arguments: Option<BTreeMap<String, Argument>>) -> Self {
+        let arguments: Option<BTreeMap<String, Argument>> = arguments.filter(|arguments: &BTreeMap<String, Argument>| !arguments.is_empty());
         Self { action_id: action_id.into(), description: description.into(), arguments }
     }
 
@@ -89,8 +90,11 @@ enum ArgumentType {
 
 impl Argument {
 
-    pub fn string(description: impl Into<String>, required: bool, r#enum: Vec<String>) -> Self {
-        Self(ArgumentType::String { values: r#enum, description: description.into(), required })
+    pub fn string(description: impl Into<String>, required: bool, r#enum: Vec<String>) -> Result<Self, SdkError> {
+        if r#enum.is_empty() {
+            return Err(SdkError::InvalidData("Enum must contain at least one value".into()));
+        }
+        Ok(Self(ArgumentType::String { values: r#enum, description: description.into(), required }))
     }
 
     pub fn integer(description: impl Into<String>, required: bool, minimum: Option<i32>, maximum: Option<i32>) -> Result<Self, SdkError> {

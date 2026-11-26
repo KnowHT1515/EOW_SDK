@@ -179,8 +179,8 @@ Requests registration of `action`(s).
                     },
                     "<argument_id>": {
                         "type": "integer",
-                        "minimum": <int>,
-                        "maximum": <int>,
+                        "minimum": <int>,     // Optional
+                        "maximum": <int>,     // Optional
                         "description": "<argument_description>",
                         "required": <bool>
                     },
@@ -256,8 +256,8 @@ Fully replaces the list of available `action`s.
                     },
                     "<argument_id>": {
                         "type": "integer",
-                        "minimum": <int>,
-                        "maximum": <int>,
+                        "minimum": <int>,     // Optional
+                        "maximum": <int>,     // Optional
                         "description": "<argument_description>",
                         "required": <bool>
                     },

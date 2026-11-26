@@ -112,6 +112,8 @@ public sealed class ResultData : EnvelopeData {
 }
 
 public sealed class SdkAction {
+    readonly IReadOnlyDictionary<string, Argument>? _arguments;
+
     public SdkAction(
         string actionId,
         string description,
@@ -132,7 +134,7 @@ public sealed class SdkAction {
             }
         }
 
-        Arguments = arguments;
+        _arguments = arguments;
     }
 
     [JsonPropertyName("action_id")]
@@ -142,7 +144,7 @@ public sealed class SdkAction {
     public string Description { get; }
 
     [JsonPropertyName("arguments"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyDictionary<string, Argument>? Arguments { get; }
+    public IReadOnlyDictionary<string, Argument>? Arguments => _arguments is { Count: > 0 } ? _arguments : null;
 }
 
 public sealed class Argument {
@@ -185,7 +187,16 @@ public sealed class Argument {
     [JsonPropertyName("required")]
     public bool Required { get; }
 
-    public static Argument String(string description, bool required, IReadOnlyList<string> @enum) => new("string", description, required, @enum: DataValidation.ValidateList(@enum, nameof(@enum)));
+    public static Argument String(string description, bool required, IReadOnlyList<string> @enum) {
+        ArgumentNullException.ThrowIfNull(@enum, nameof(@enum));
+        var values = @enum.ToArray();
+        if (values.Length == 0) {
+            throw new ArgumentException("Enum must contain at least one value.", nameof(@enum));
+        }
+
+        DataValidation.ValidateList(values, nameof(@enum));
+        return new("string", description, required, @enum: Array.AsReadOnly(values));
+    }
 
     public static Argument Integer(string description, bool required, int? minimum = null, int? maximum = null) => new("integer", description, required, minimum: minimum, maximum: maximum);
 
