@@ -46,21 +46,12 @@ pub struct SdkAction {
     description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     arguments: Option<BTreeMap<String, Argument>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    required: Option<Vec<String>>,
 }
 
 impl SdkAction {
 
-    pub fn new(action_id: impl Into<String>, description: impl Into<String>, arguments: Option<BTreeMap<String, Argument>>, required: Option<Vec<String>>) -> Result<Self, SdkError> {
-        if let Some(names) = &required {
-            for name in names {
-                if !arguments.as_ref().is_some_and(|arguments: &BTreeMap<String, Argument>| arguments.contains_key(name)) {
-                    return Err(SdkError::InvalidData(format!("Required argument '{name}' is not declared")));
-                }
-            }
-        }
-        Ok(Self { action_id: action_id.into(), description: description.into(), arguments, required })
+    pub fn new(action_id: impl Into<String>, description: impl Into<String>, arguments: Option<BTreeMap<String, Argument>>) -> Self {
+        Self { action_id: action_id.into(), description: description.into(), arguments }
     }
 
     pub fn action_id(&self) -> &str {
@@ -80,6 +71,7 @@ enum ArgumentType {
         #[serde(rename = "enum")]
         values: Vec<String>,
         description: String,
+        required: bool,
     },
     Integer {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,28 +79,30 @@ enum ArgumentType {
         #[serde(skip_serializing_if = "Option::is_none")]
         maximum: Option<i32>,
         description: String,
+        required: bool,
     },
     Boolean {
         description: String,
+        required: bool,
     },
 }
 
 impl Argument {
 
-    pub fn string(description: impl Into<String>, r#enum: Vec<String>) -> Self {
-        Self(ArgumentType::String { values: r#enum, description: description.into() })
+    pub fn string(description: impl Into<String>, required: bool, r#enum: Vec<String>) -> Self {
+        Self(ArgumentType::String { values: r#enum, description: description.into(), required })
     }
 
-    pub fn integer(description: impl Into<String>, minimum: Option<i32>, maximum: Option<i32>) -> Result<Self, SdkError> {
+    pub fn integer(description: impl Into<String>, required: bool, minimum: Option<i32>, maximum: Option<i32>) -> Result<Self, SdkError> {
         if let (Some(minimum), Some(maximum)) = (minimum, maximum)
             && minimum > maximum {
             return Err(SdkError::InvalidData(format!("Maximum ({maximum}) must be greater than or equal to minimum ({minimum})")));
         }
-        Ok(Self(ArgumentType::Integer { minimum, maximum, description: description.into() }))
+        Ok(Self(ArgumentType::Integer { minimum, maximum, description: description.into(), required }))
     }
 
-    pub fn boolean(description: impl Into<String>) -> Self {
-        Self(ArgumentType::Boolean { description: description.into() })
+    pub fn boolean(description: impl Into<String>, required: bool) -> Self {
+        Self(ArgumentType::Boolean { description: description.into(), required })
     }
 
 }

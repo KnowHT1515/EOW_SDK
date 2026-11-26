@@ -174,25 +174,23 @@ Requests registration of `action`(s).
                             "<argument>",
                             ...
                         ],
-                        "description": "<argument_description>"
+                        "description": "<argument_description>",
+                        "required": <bool>
                     },
                     "<argument_id>": {
                         "type": "integer",
                         "minimum": <int>,
                         "maximum": <int>,
-                        "description": "<argument_description>"
+                        "description": "<argument_description>",
+                        "required": <bool>
                     },
                     "<argument_id>": {
                         "type": "boolean",
-                        "description": "<argument_description>"
+                        "description": "<argument_description>",
+                        "required": <bool>
                     },
                     ...
-                },
-                "required": [
-                    "<argument_id>",
-                    "<argument_id>",
-                    ...
-                ]
+                }
             },
             ...
         ]
@@ -253,25 +251,23 @@ Fully replaces the list of available `action`s.
                             "<argument>",
                             ...
                         ],
-                        "description": "<argument_description>"
+                        "description": "<argument_description>",
+                        "required": <bool>
                     },
                     "<argument_id>": {
                         "type": "integer",
                         "minimum": <int>,
                         "maximum": <int>,
-                        "description": "<argument_description>"
+                        "description": "<argument_description>",
+                        "required": <bool>
                     },
                     "<argument_id>": {
                         "type": "boolean",
-                        "description": "<argument_description>"
+                        "description": "<argument_description>",
+                        "required": <bool>
                     },
                     ...
-                },
-                "required": [
-                    "<argument_id>",
-                    "<argument_id>",
-                    ...
-                ]
+                }
             },
             ...
         ]

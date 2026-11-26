@@ -115,8 +115,7 @@ public sealed class SdkAction {
     public SdkAction(
         string actionId,
         string description,
-        IReadOnlyDictionary<string, Argument>? arguments = null,
-        IReadOnlyList<string>? required = null
+        IReadOnlyDictionary<string, Argument>? arguments = null
     ) {
         ActionId = actionId ?? throw new ArgumentNullException(nameof(actionId));
         Description = description ?? throw new ArgumentNullException(nameof(description));
@@ -133,21 +132,7 @@ public sealed class SdkAction {
             }
         }
 
-        if (required is { Count: > 0 }) {
-            var declaredNames = arguments?.Keys.ToHashSet(StringComparer.Ordinal);
-            foreach (var argumentId in required) {
-                if (argumentId is null) {
-                    throw new ArgumentException("Required argument names must not be null.", nameof(required));
-                }
-
-                if (declaredNames is null || !declaredNames.Contains(argumentId)) {
-                    throw new ArgumentException($"Required argument '{argumentId}' is not declared.", nameof(required));
-                }
-            }
-        }
-
         Arguments = arguments;
-        Required = required;
     }
 
     [JsonPropertyName("action_id")]
@@ -158,15 +143,13 @@ public sealed class SdkAction {
 
     [JsonPropertyName("arguments"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyDictionary<string, Argument>? Arguments { get; }
-
-    [JsonPropertyName("required"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<string>? Required { get; }
 }
 
 public sealed class Argument {
     private Argument(
         string type,
         string description,
+        bool required,
         IReadOnlyList<string>? @enum = null,
         int? minimum = null,
         int? maximum = null
@@ -181,6 +164,7 @@ public sealed class Argument {
         Enum = @enum;
         Minimum = minimum;
         Maximum = maximum;
+        Required = required;
     }
 
     [JsonPropertyName("type")]
@@ -198,11 +182,14 @@ public sealed class Argument {
     [JsonPropertyName("description")]
     public string Description { get; }
 
-    public static Argument String(string description, IReadOnlyList<string> @enum) => new("string", description, @enum: DataValidation.ValidateList(@enum, nameof(@enum)));
+    [JsonPropertyName("required")]
+    public bool Required { get; }
 
-    public static Argument Integer(string description, int? minimum = null, int? maximum = null) => new("integer", description, minimum: minimum, maximum: maximum);
+    public static Argument String(string description, bool required, IReadOnlyList<string> @enum) => new("string", description, required, @enum: DataValidation.ValidateList(@enum, nameof(@enum)));
 
-    public static Argument Boolean(string description) => new("boolean", description);
+    public static Argument Integer(string description, bool required, int? minimum = null, int? maximum = null) => new("integer", description, required, minimum: minimum, maximum: maximum);
+
+    public static Argument Boolean(string description, bool required) => new("boolean", description, required);
 }
 
 static class DataValidation {
